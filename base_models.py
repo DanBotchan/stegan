@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from model.unet_autoenc import BeatGANsAutoencConfig
 from renderer import render_condition
-from utils import BaseReturn
+from utils import BaseReturn, show_tensor_image
 from config_base import BaseConfig
 
 @dataclass
@@ -131,7 +131,7 @@ class BaseModel(nn.Module):
             dims=2,
             dropout=conf.dropout,
             embed_channels=conf.embed_channels,
-            enc_out_channels=1024,  # conf.style_ch,
+            enc_out_channels=512,  # conf.style_ch,
             enc_pool=conf.net_enc_pool,
             enc_num_res_block=conf.net_enc_num_res_blocks,
             enc_channel_mult=conf.net_enc_channel_mult,
@@ -167,10 +167,10 @@ class BaseModel(nn.Module):
             # Use concat to combine the inputs, and detach because we don't want to train the encoders
             x_concat_sem = torch.concat((cover, hide), dim=1)
             encode_cond = self.encoder.encode(x_concat_sem)['cond']
-            encoded = render_condition(self.conf, self.encoder, c_noise, sampler=sampler, cond=encode_cond)
+            encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond)
 
             decode_cond = self.decoder.encode(encoded)['cond']
-            decoded = render_condition(self.conf, self.decoder, c_noise, sampler=sampler, cond=decode_cond)
+            decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond)
 
         return BaseReturn(encoded=encoded, decoded=decoded)
 

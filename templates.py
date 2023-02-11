@@ -25,6 +25,7 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
 
     conf.eval_ema_every_samples = 10_000_000
     conf.eval_every_samples = 10_000_000
+    conf.sample_every_samples = 20_000
     conf.sample_size = 32
 
     conf.T_eval = 20

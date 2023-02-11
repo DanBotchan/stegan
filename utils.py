@@ -1,7 +1,26 @@
 from typing import NamedTuple
 
 import torch
+from torchvision.transforms import functional as TF
+import matplotlib.pyplot as plt
 
+
+def show_tensor_image(tensor: torch.Tensor, range_zero_one: bool = False):
+    """Show a tensor of an image
+
+    Args:
+        tensor (torch.Tensor): Tensor of shape [N, 3, H, W] in range [-1, 1] or in range [0, 1]
+    """
+    if not range_zero_one:
+        tensor = (tensor + 1) / 2
+    tensor.clamp(0, 1)
+
+    batch_size = tensor.shape[0]
+    for i in range(batch_size):
+        plt.title(f"Fig_{i}")
+        pil_image = TF.to_pil_image(tensor[i])
+        plt.imshow(pil_image)
+        plt.show(block=True)
 
 class BaseReturn(NamedTuple):
     encoded: torch.Tensor

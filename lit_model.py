@@ -13,7 +13,7 @@ from lmdb_writer import *
 from config import TrainConfig, TrainMode
 from dist_utils import get_world_size
 from choices import OptimizerType
-from utils import WarmupLR
+from utils import WarmupLR, show_tensor_image, is_time
 
 
 class LitModel(pl.LightningModule):
@@ -292,7 +292,7 @@ class LitModel(pl.LightningModule):
             loss = encoder_losses['loss'].mean() + decoder_losses['loss'].mean()
 
             # divide by accum batches to make the accumulated gradient exact!
-            for key in ['loss', 'vae', 'latent', 'mmd', 'chamfer', 'arg_cnt']:
+            for key in ['loss', 'vae']:
                 if key in encoder_losses and key in decoder_losses:
                     encoder_losses[key] = self.all_gather(encoder_losses[key]).mean()
                     decoder_losses[key] = self.all_gather(decoder_losses[key]).mean()
@@ -304,27 +304,14 @@ class LitModel(pl.LightningModule):
 
         return {'loss': loss}
 
-    def on_train_batch_end(self, outputs, batch, batch_idx: int,
-                           dataloader_idx: int) -> None:
+    def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
         """
         after each training step ...
         """
         if self.is_last_accum(batch_idx):
-            # only apply ema on the last gradient accumulation step,
-            # if it is the iteration that has optimizer.step()
-            if self.conf.train_mode == TrainMode.latent_diffusion:
-                # it trains only the latent hence change only the latent
-                ema(self.model.latent_net, self.ema_model.latent_net,
-                    self.conf.ema_decay)
-            else:
-                ema(self.model, self.ema_model, self.conf.ema_decay)
-
             # logging
-            if self.conf.train_mode.require_dataset_infer():
-                imgs = None
-            else:
-                imgs = batch['img']
-            self.log_sample(x_start=imgs)
+            cover, hide, noise = batch['cover'], batch['hide'], batch['noise']
+            self.log_sample(cover=cover, hide=hide, noise=noise)
             self.evaluate_scores()
 
     def on_before_optimizer_step(self, optimizer: Optimizer,
@@ -333,132 +320,90 @@ class LitModel(pl.LightningModule):
         # this is the currently correct way to do it
         if self.conf.grad_clip > 0:
             # from trainer.params_grads import grads_norm, iter_opt_params
-            params = [
-                p for group in optimizer.param_groups for p in group['params']
-            ]
+            params = [p for group in optimizer.param_groups for p in group['params']]
             # print('before:', grads_norm(iter_opt_params(optimizer)))
-            torch.nn.utils.clip_grad_norm_(params,
-                                           max_norm=self.conf.grad_clip)
+            torch.nn.utils.clip_grad_norm_(params, max_norm=self.conf.grad_clip)
             # print('after:', grads_norm(iter_opt_params(optimizer)))
 
-    def log_sample(self, x_start):
+    def log_sample(self, cover, hide, noise):
         """
         put images to the tensorboard
         """
 
-        def do(model,
-               postfix,
-               use_xstart,
-               save_real=False,
-               no_latent_diff=False,
-               interpolate=False):
+        def do(model, postfix, save_real=False):
             model.eval()
             with torch.no_grad():
-                all_x_T = self.split_tensor(self.x_T)
-                batch_size = min(len(all_x_T), self.conf.batch_size_eval)
-                # allow for superlarge models
-                loader = DataLoader(all_x_T, batch_size=batch_size)
+                l_encoded, l_decoded = [], []
+                for c, h, n in zip(cover, hide, noise):
+                    with amp.autocast(self.conf.fp16):
+                        gen = self.model(cover=c, hide=h, c_noise=n, sampler=self.eval_sampler)
+                    l_encoded.append(gen.encoded)
+                    l_decoded.append(gen.decoded)
 
-                Gen = []
-                for x_T in loader:
-                    if use_xstart:
-                        _xstart = x_start[:len(x_T)]
-                    else:
-                        _xstart = None
+                encoded_imgs = self.all_gather(torch.cat(l_encoded))
+                decoded_imgs = self.all_gather(torch.cat(l_decoded))
 
-                    if self.conf.train_mode.is_latent_diffusion(
-                    ) and not use_xstart:
-                        None
-                    else:
-                        if not use_xstart and self.conf.model_type.has_noise_to_cond(
-                        ):
-                            model: BeatGANsAutoencModel
-                            # special case, it may not be stochastic, yet can sample
-                            cond = torch.randn(len(x_T),
-                                               self.conf.style_ch,
-                                               device=self.device)
-                            cond = model.noise_to_cond(cond)
-                        else:
-                            if interpolate:
-                                with amp.autocast(self.conf.fp16):
-                                    cond = model.encoder(_xstart)
-                                    i = torch.randperm(len(cond))
-                                    cond = (cond + cond[i]) / 2
-                            else:
-                                cond = None
-                        gen = self.eval_sampler.sample(model=model,
-                                                       noise=x_T,
-                                                       cond=cond,
-                                                       x_start=_xstart)
-                    Gen.append(gen)
-
-                gen = torch.cat(Gen)
-                gen = self.all_gather(gen)
-                if gen.dim() == 5:
+                if encoded_imgs.dim() == 5 or encoded_imgs:
                     # (n, c, h, w)
-                    gen = gen.flatten(0, 1)
+                    encoded_imgs = encoded_imgs.flatten(0, 1)
 
-                if save_real and use_xstart:
+                if decoded_imgs.dim() == 5:
+                    # (n, c, h, w)
+                    decoded_imgs = decoded_imgs.flatten(0, 1)
+
+                if save_real:
                     # save the original images to the tensorboard
-                    real = self.all_gather(_xstart)
-                    if real.dim() == 5:
-                        real = real.flatten(0, 1)
+                    real_cover = self.all_gather(cover)
+                    real_hide = self.all_gather(hide)
+
+                    if real_cover.dim() == 5:
+                        real_cover = real_cover.flatten(0, 1)
+                    if real_hide.dim() == 5:
+                        real_hide = real_hide.flatten(0, 1)
 
                     if self.global_rank == 0:
-                        grid_real = (make_grid(real) + 1) / 2
-                        self.logger.experiment.add_image(
-                            f'sample{postfix}/real', grid_real,
-                            self.num_samples)
+                        grid_real_cover = (make_grid(real_cover) + 1) / 2
+                        grid_real_hide = (make_grid(real_hide) + 1) / 2
+                        self.logger.experiment.add_image(f'sample{postfix}/real_cover', grid_real_cover,
+                                                         self.num_samples)
+                        self.logger.experiment.add_image(f'sample{postfix}/real_hide', grid_real_hide, self.num_samples)
+                        sample_dir_c = os.path.join(self.conf.logdir, f'sample{postfix}', 'cover')
+                        sample_dir_h = os.path.join(self.conf.logdir, f'sample{postfix}', 'hide')
+
+                        if not os.path.exists(sample_dir_c):
+                            os.makedirs(sample_dir_c)
+                        if not os.path.exists(sample_dir_h):
+                            os.makedirs(sample_dir_h)
+
+                        path_c = os.path.join(sample_dir_c, f'{self.num_samples:010}.png')
+                        path_h = os.path.join(sample_dir_h, f'{self.num_samples:010}.png')
+                        save_image(grid_real_cover, path_c)
+                        save_image(grid_real_hide, path_h)
 
                 if self.global_rank == 0:
                     # save samples to the tensorboard
-                    grid = (make_grid(gen) + 1) / 2
-                    sample_dir = os.path.join(self.conf.logdir,
-                                              f'sample{postfix}')
-                    if not os.path.exists(sample_dir):
-                        os.makedirs(sample_dir)
-                    path = os.path.join(sample_dir,
-                                        '%d.png' % self.num_samples)
-                    save_image(grid, path)
-                    self.logger.experiment.add_image(f'sample{postfix}', grid,
-                                                     self.num_samples)
+                    encoded_grid = (make_grid(encoded_imgs) + 1) / 2
+                    decoded_grid = (make_grid(decoded_imgs) + 1) / 2
+                    sample_dir_e = os.path.join(self.conf.logdir, f'sample{postfix}', 'encoded')
+                    sample_dir_d = os.path.join(self.conf.logdir, f'sample{postfix}', 'decoded')
+
+                    if not os.path.exists(sample_dir_e):
+                        os.makedirs(sample_dir_e)
+                    if not os.path.exists(sample_dir_d):
+                        os.makedirs(sample_dir_d)
+
+                    path_e = os.path.join(sample_dir_e, f'{self.num_samples:010}.png')
+                    path_d = os.path.join(sample_dir_d, f'{self.num_samples:010}.png')
+                    save_image(encoded_grid, path_e)
+                    save_image(decoded_grid, path_d)
+                    self.logger.experiment.add_image(f'sample{postfix}/encoded/', encoded_grid, self.num_samples)
+                    self.logger.experiment.add_image(f'sample{postfix}/decoded/', decoded_grid, self.num_samples)
+
             model.train()
 
-        if self.conf.sample_every_samples > 0 and is_time(
-                self.num_samples, self.conf.sample_every_samples,
-                self.conf.batch_size_effective):
-
-            if self.conf.train_mode.require_dataset_infer():
-                do(self.model, '', use_xstart=False)
-                do(self.ema_model, '_ema', use_xstart=False)
-            else:
-                if self.conf.model_type.has_autoenc(
-                ) and self.conf.model_type.can_sample():
-                    do(self.model, '', use_xstart=False)
-                    do(self.ema_model, '_ema', use_xstart=False)
-                    # autoencoding mode
-                    do(self.model, '_enc', use_xstart=True, save_real=True)
-                    do(self.ema_model,
-                       '_enc_ema',
-                       use_xstart=True,
-                       save_real=True)
-                elif self.conf.train_mode.use_latent_net():
-                    do(self.model, '', use_xstart=False)
-                    do(self.ema_model, '_ema', use_xstart=False)
-                    # autoencoding mode
-                    do(self.model, '_enc', use_xstart=True, save_real=True)
-                    do(self.model,
-                       '_enc_nodiff',
-                       use_xstart=True,
-                       save_real=True,
-                       no_latent_diff=True)
-                    do(self.ema_model,
-                       '_enc_ema',
-                       use_xstart=True,
-                       save_real=True)
-                else:
-                    do(self.model, '', use_xstart=True, save_real=True)
-                    do(self.ema_model, '_ema', use_xstart=True, save_real=True)
+        if self.conf.sample_every_samples > 0 and is_time(self.num_samples, self.conf.sample_every_samples,
+                                                          self.conf.batch_size_effective):
+            do(self.model, '_enc', save_real=True)
 
     def evaluate_scores(self):
         """
