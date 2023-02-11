@@ -1,21 +1,24 @@
 from experiment import *
+from choices import *
 
 
-
-def stegan_config():
+def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     """
     base configuration for all Diff-AE models.
     """
     conf = TrainConfig()
+    conf.debug = debug
 
-    conf.num_workers = 32
-    conf.batch_size = 12
+    conf.num_workers = 32 if not debug else 0
+    conf.batch_size = 10 if not debug else 1
 
+    conf.name = 'experiment_date'
+    conf.model_name = ModelName.steganography
     conf.beatgans_gen_type = GenerativeType.ddim
     conf.beta_scheduler = 'linear'
-    conf.data_name = 'ffhqlmdb128'
+    conf.data_name = 'ffhqlmdb128_steg'
     conf.diffusion_type = 'beatgans'
-    conf.scale_up_gpus(4)
+    conf.scale_up_gpus(scale_up_gpus)
 
     conf.fp16 = True
     conf.lr = 1e-4
@@ -27,8 +30,7 @@ def stegan_config():
     conf.T_eval = 20
     conf.T = 80
 
-    conf.model_name = ModelName.beatgans_autoenc
-    conf.net_attn = (16, )
+    conf.net_attn = (16,)
     conf.net_beatgans_attn_head = 1
     conf.net_beatgans_embed_channels = 512
     conf.net_beatgans_resnet_two_cond = True
@@ -42,5 +44,3 @@ def stegan_config():
     conf.net_enc_channel_mult = (1, 1, 2, 3, 4, 4)
     conf.make_model_conf()
     return conf
-
-

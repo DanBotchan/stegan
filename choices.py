@@ -109,6 +109,7 @@ class ModelName(Enum):
 
     beatgans_ddpm = 'beatgans_ddpm'
     beatgans_autoenc = 'beatgans_autoenc'
+    steganography = 'steganography'
 
 
 class ModelMeanType(Enum):

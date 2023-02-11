@@ -18,6 +18,7 @@ class BeatGANsAutoencConfig(BeatGANsUNetConfig):
     enc_num_res_block: int = 2
     enc_channel_mult: Tuple[int] = None
     enc_grad_checkpoint: bool = False
+    enc_in_channels: int = 3
     latent_net_conf: MLPSkipNetConfig = None
 
     def make_model(self):
@@ -37,7 +38,7 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
 
         self.encoder = BeatGANsEncoderConfig(
             image_size=conf.image_size,
-            in_channels=conf.in_channels,
+            in_channels=conf.enc_in_channels,
             model_channels=conf.model_channels,
             out_hid_channels=conf.enc_out_channels,
             out_channels=conf.enc_out_channels,

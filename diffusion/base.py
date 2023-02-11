@@ -54,6 +54,7 @@ class GaussianDiffusionBeatGans:
                               model so that they are always scaled like in the
                               original paper (0 to 1000).
     """
+
     def __init__(self, conf: GaussianDiffusionBeatGansConfig):
         self.conf = conf
         self.model_mean_type = conf.model_mean_type
@@ -73,7 +74,7 @@ class GaussianDiffusionBeatGans:
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
         self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0)
-        assert self.alphas_cumprod_prev.shape == (self.num_timesteps, )
+        assert self.alphas_cumprod_prev.shape == (self.num_timesteps,)
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
         self.sqrt_alphas_cumprod = np.sqrt(self.alphas_cumprod)
@@ -120,46 +121,34 @@ class GaussianDiffusionBeatGans:
         if noise is None:
             noise = th.randn_like(x_start)
 
-        x_t = self.q_sample(x_start, t, noise=noise)
+        # If we are in the decoder, add noise to the hide images, if we are in the encoder add noise to the cover images
+        if 'hide' in model_kwargs.keys():
+            x_t = self.q_sample(model_kwargs['hide'], t, noise=noise)
+        elif 'cover' in model_kwargs.keys():
+            x_t = self.q_sample(model_kwargs['cover'], t, noise=noise)
+        else:
+            x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {'x_t': x_t}
 
-        if self.loss_type in [
-                LossType.mse,
-                LossType.l1,
-        ]:
+        if self.loss_type in [LossType.mse, LossType.l1, ]:
             with autocast(self.conf.fp16):
                 # x_t is static wrt. to the diffusion process
-                model_forward = model.forward(x=x_t.detach(),
-                                              t=self._scale_timesteps(t),
-                                              x_start=x_start.detach(),
-                                              **model_kwargs)
+                model_forward = model.forward(x=x_t, t=self._scale_timesteps(t), x_start=x_start, **model_kwargs)
             model_output = model_forward.pred
-
             _model_output = model_output
-            if self.conf.train_pred_xstart_detach:
-                _model_output = _model_output.detach()
+
             # get the pred xstart
-            p_mean_var = self.p_mean_variance(
-                model=DummyModel(pred=_model_output),
-                # gradient goes through x_t
-                x=x_t,
-                t=t,
-                clip_denoised=False)
+            p_mean_var = self.p_mean_variance(model=DummyModel(pred=_model_output), x=x_t, t=t, clip_denoised=False)
             terms['pred_xstart'] = p_mean_var['pred_xstart']
-
-            # model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
-
-            target_types = {
-                ModelMeanType.eps: noise,
-            }
+            target_types = {ModelMeanType.eps: noise}
             target = target_types[self.model_mean_type]
-            assert model_output.shape == target.shape == x_start.shape
+            assert model_output.shape == target.shape
 
             if self.loss_type == LossType.mse:
                 if self.model_mean_type == ModelMeanType.eps:
                     # (n, c, h, w) => (n, )
-                    terms["mse"] = mean_flat((target - model_output)**2)
+                    terms["mse"] = mean_flat((target - model_output) ** 2)
                 else:
                     raise NotImplementedError()
             elif self.loss_type == LossType.l1:
@@ -223,8 +212,8 @@ class GaussianDiffusionBeatGans:
         :return: A tuple (mean, variance, log_variance), all of x_start's shape.
         """
         mean = (
-            _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) *
-            x_start)
+                _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) *
+                x_start)
         variance = _extract_into_tensor(1.0 - self.alphas_cumprod, t,
                                         x_start.shape)
         log_variance = _extract_into_tensor(self.log_one_minus_alphas_cumprod,
@@ -246,9 +235,9 @@ class GaussianDiffusionBeatGans:
             noise = th.randn_like(x_start)
         assert noise.shape == x_start.shape
         return (
-            _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) *
-            x_start + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod,
-                                           t, x_start.shape) * noise)
+                _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) *
+                x_start + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod,
+                                               t, x_start.shape) * noise)
 
     def q_posterior_mean_variance(self, x_start, x_t, t):
         """
@@ -259,10 +248,10 @@ class GaussianDiffusionBeatGans:
         """
         assert x_start.shape == x_t.shape
         posterior_mean = (
-            _extract_into_tensor(self.posterior_mean_coef1, t, x_t.shape) *
-            x_start +
-            _extract_into_tensor(self.posterior_mean_coef2, t, x_t.shape) *
-            x_t)
+                _extract_into_tensor(self.posterior_mean_coef1, t, x_t.shape) *
+                x_start +
+                _extract_into_tensor(self.posterior_mean_coef2, t, x_t.shape) *
+                x_t)
         posterior_variance = _extract_into_tensor(self.posterior_variance, t,
                                                   x_t.shape)
         posterior_log_variance_clipped = _extract_into_tensor(
@@ -302,7 +291,7 @@ class GaussianDiffusionBeatGans:
             model_kwargs = {}
 
         B, C = x.shape[:2]
-        assert t.shape == (B, )
+        assert t.shape == (B,)
         with autocast(self.conf.fp16):
             model_forward = model.forward(x=x,
                                           t=self._scale_timesteps(t),
@@ -310,7 +299,7 @@ class GaussianDiffusionBeatGans:
         model_output = model_forward.pred
 
         if self.model_var_type in [
-                ModelVarType.fixed_large, ModelVarType.fixed_small
+            ModelVarType.fixed_large, ModelVarType.fixed_small
         ]:
             model_variance, model_log_variance = {
                 # for fixedlarge, we set the initial (log-)variance like so
@@ -337,7 +326,7 @@ class GaussianDiffusionBeatGans:
             return x
 
         if self.model_mean_type in [
-                ModelMeanType.eps,
+            ModelMeanType.eps,
         ]:
             if self.model_mean_type == ModelMeanType.eps:
                 pred_xstart = process_xstart(
@@ -370,10 +359,10 @@ class GaussianDiffusionBeatGans:
     def _predict_xstart_from_xprev(self, x_t, t, xprev):
         assert x_t.shape == xprev.shape
         return (  # (xprev - coef2*x_t) / coef1
-            _extract_into_tensor(1.0 / self.posterior_mean_coef1, t, x_t.shape)
-            * xprev - _extract_into_tensor(
-                self.posterior_mean_coef2 / self.posterior_mean_coef1, t,
-                x_t.shape) * x_t)
+                _extract_into_tensor(1.0 / self.posterior_mean_coef1, t, x_t.shape)
+                * xprev - _extract_into_tensor(
+            self.posterior_mean_coef2 / self.posterior_mean_coef1, t,
+            x_t.shape) * x_t)
 
     def _predict_xstart_from_scaled_xstart(self, t, scaled_xstart):
         return scaled_xstart * _extract_into_tensor(
@@ -383,7 +372,7 @@ class GaussianDiffusionBeatGans:
         return (_extract_into_tensor(self.sqrt_recip_alphas_cumprod, t,
                                      x_t.shape) * x_t -
                 pred_xstart) / _extract_into_tensor(
-                    self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+            self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
 
     def _predict_eps_from_scaled_xstart(self, x_t, t, scaled_xstart):
         """
@@ -437,14 +426,14 @@ class GaussianDiffusionBeatGans:
         return out
 
     def p_sample(
-        self,
-        model: Model,
-        x,
-        t,
-        clip_denoised=True,
-        denoised_fn=None,
-        cond_fn=None,
-        model_kwargs=None,
+            self,
+            model: Model,
+            x,
+            t,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
     ):
         """
         Sample x_{t-1} from the model at the given timestep.
@@ -485,16 +474,16 @@ class GaussianDiffusionBeatGans:
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def p_sample_loop(
-        self,
-        model: Model,
-        shape=None,
-        noise=None,
-        clip_denoised=True,
-        denoised_fn=None,
-        cond_fn=None,
-        model_kwargs=None,
-        device=None,
-        progress=False,
+            self,
+            model: Model,
+            shape=None,
+            noise=None,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            device=None,
+            progress=False,
     ):
         """
         Generate samples from the model.
@@ -531,16 +520,16 @@ class GaussianDiffusionBeatGans:
         return final["sample"]
 
     def p_sample_loop_progressive(
-        self,
-        model: Model,
-        shape=None,
-        noise=None,
-        clip_denoised=True,
-        denoised_fn=None,
-        cond_fn=None,
-        model_kwargs=None,
-        device=None,
-        progress=False,
+            self,
+            model: Model,
+            shape=None,
+            noise=None,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            device=None,
+            progress=False,
     ):
         """
         Generate samples from the model and yield intermediate samples from
@@ -582,15 +571,15 @@ class GaussianDiffusionBeatGans:
                 img = out["sample"]
 
     def ddim_sample(
-        self,
-        model: Model,
-        x,
-        t,
-        clip_denoised=True,
-        denoised_fn=None,
-        cond_fn=None,
-        model_kwargs=None,
-        eta=0.0,
+            self,
+            model: Model,
+            x,
+            t,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            eta=0.0,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -624,21 +613,21 @@ class GaussianDiffusionBeatGans:
         # Equation 12.
         noise = th.randn_like(x)
         mean_pred = (out["pred_xstart"] * th.sqrt(alpha_bar_prev) +
-                     th.sqrt(1 - alpha_bar_prev - sigma**2) * eps)
+                     th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps)
         nonzero_mask = ((t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
                         )  # no noise when t == 0
         sample = mean_pred + nonzero_mask * sigma * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def ddim_reverse_sample(
-        self,
-        model: Model,
-        x,
-        t,
-        clip_denoised=True,
-        denoised_fn=None,
-        model_kwargs=None,
-        eta=0.0,
+            self,
+            model: Model,
+            x,
+            t,
+            clip_denoised=True,
+            denoised_fn=None,
+            model_kwargs=None,
+            eta=0.0,
     ):
         """
         Sample x_{t+1} from the model using DDIM reverse ODE.
@@ -657,7 +646,7 @@ class GaussianDiffusionBeatGans:
         # in case we used x_start or x_prev prediction.
         eps = (_extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x.shape)
                * x - out["pred_xstart"]) / _extract_into_tensor(
-                   self.sqrt_recipm1_alphas_cumprod, t, x.shape)
+            self.sqrt_recipm1_alphas_cumprod, t, x.shape)
         alpha_bar_next = _extract_into_tensor(self.alphas_cumprod_next, t,
                                               x.shape)
 
@@ -668,14 +657,14 @@ class GaussianDiffusionBeatGans:
         return {"sample": mean_pred, "pred_xstart": out["pred_xstart"]}
 
     def ddim_reverse_sample_loop(
-        self,
-        model: Model,
-        x,
-        clip_denoised=True,
-        denoised_fn=None,
-        model_kwargs=None,
-        eta=0.0,
-        device=None,
+            self,
+            model: Model,
+            x,
+            clip_denoised=True,
+            denoised_fn=None,
+            model_kwargs=None,
+            eta=0.0,
+            device=None,
     ):
         if device is None:
             device = next(model.parameters()).device
@@ -714,17 +703,17 @@ class GaussianDiffusionBeatGans:
         }
 
     def ddim_sample_loop(
-        self,
-        model: Model,
-        shape=None,
-        noise=None,
-        clip_denoised=True,
-        denoised_fn=None,
-        cond_fn=None,
-        model_kwargs=None,
-        device=None,
-        progress=False,
-        eta=0.0,
+            self,
+            model: Model,
+            shape=None,
+            noise=None,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            device=None,
+            progress=False,
+            eta=0.0,
     ):
         """
         Generate samples from the model using DDIM.
@@ -748,17 +737,17 @@ class GaussianDiffusionBeatGans:
         return final["sample"]
 
     def ddim_sample_loop_progressive(
-        self,
-        model: Model,
-        shape=None,
-        noise=None,
-        clip_denoised=True,
-        denoised_fn=None,
-        cond_fn=None,
-        model_kwargs=None,
-        device=None,
-        progress=False,
-        eta=0.0,
+            self,
+            model: Model,
+            shape=None,
+            noise=None,
+            clip_denoised=True,
+            denoised_fn=None,
+            cond_fn=None,
+            model_kwargs=None,
+            device=None,
+            progress=False,
+            eta=0.0,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -911,10 +900,10 @@ class GaussianDiffusionBeatGans:
                     model_kwargs=model_kwargs,
                 )
             vb.append(out["output"])
-            xstart_mse.append(mean_flat((out["pred_xstart"] - x_start)**2))
+            xstart_mse.append(mean_flat((out["pred_xstart"] - x_start) ** 2))
             eps = self._predict_eps_from_xstart(x_t, t_batch,
                                                 out["pred_xstart"])
-            mse.append(mean_flat((eps - noise)**2))
+            mse.append(mean_flat((eps - noise) ** 2))
 
         vb = th.stack(vb, dim=1)
         xstart_mse = th.stack(xstart_mse, dim=1)
@@ -969,7 +958,7 @@ def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     elif schedule_name == "cosine":
         return betas_for_alpha_bar(
             num_diffusion_timesteps,
-            lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2)**2,
+            lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2,
         )
     elif schedule_name == "const0.01":
         scale = 1000 / num_diffusion_timesteps
@@ -1053,7 +1042,7 @@ def normal_kl(mean1, logvar1, mean2, logvar2):
     ]
 
     return 0.5 * (-1.0 + logvar2 - logvar1 + th.exp(logvar1 - logvar2) +
-                  ((mean1 - mean2)**2) * th.exp(-logvar2))
+                  ((mean1 - mean2) ** 2) * th.exp(-logvar2))
 
 
 def approx_standard_normal_cdf(x):
@@ -1062,7 +1051,7 @@ def approx_standard_normal_cdf(x):
     standard normal.
     """
     return 0.5 * (
-        1.0 + th.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * th.pow(x, 3))))
+            1.0 + th.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * th.pow(x, 3))))
 
 
 def discretized_gaussian_log_likelihood(x, *, means, log_scales):

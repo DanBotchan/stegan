@@ -1,0 +1,176 @@
+from typing import Tuple
+from dataclasses import dataclass
+
+import torch
+import torch.nn as nn
+
+from model.unet_autoenc import BeatGANsAutoencConfig
+from renderer import render_condition
+from utils import BaseReturn
+from config_base import BaseConfig
+
+@dataclass
+class SteganConfig(BaseConfig):
+    image_size: int = 128
+    in_channels: int = 3
+    enc_in_channels: int = 6
+    dec_in_channels: int = 3
+    enc_cond_vec_size: int = 1024
+    dec_cond_vec_size: int = 512
+    net_enc_pool: str = 'adaptivenonzero'
+    # base channels, will be multiplied
+    model_channels: int = 64
+    # output of the unet
+    # suggest: 3
+    # you only need 6 if you also model the variance of the noise prediction (usually we use an analytical variance hence 3)
+    out_channels: int = 3
+    # how many repeating resblocks per resolution
+    # the decoding side would have "one more" resblock
+    # default: 2
+    num_res_blocks: int = 2
+    # you can also set the number of resblocks specifically for the input blocks
+    # default: None = above
+    num_input_res_blocks: int = None
+    # number of time embed channels and style channels
+    embed_channels: int = 512
+    # at what resolutions you want to do self-attention of the feature maps
+    # attentions generally improve performance
+    # default: [16]
+    # beatgans: [32, 16, 8]
+    attention_resolutions: Tuple[int] = (16, )
+    # number of time embed channels
+    time_embed_channels: int = None
+    # dropout applies to the resblocks (on feature maps)
+    dropout: float = 0.1
+    channel_mult: Tuple[int] = (1, 2, 4, 8)
+    input_channel_mult: Tuple[int] = None
+    conv_resample: bool = True
+    # always 2 = 2d conv
+    dims: int = 2
+    # don't use this, legacy from BeatGANs
+    num_classes: int = None
+    use_checkpoint: bool = False
+    # number of attention heads
+    num_heads: int = 1
+    # or specify the number of channels per attention head
+    num_head_channels: int = -1
+    # what's this?
+    num_heads_upsample: int = -1
+    # use resblock for upscale/downscale blocks (expensive)
+    # default: True (BeatGANs)
+    resblock_updown: bool = True
+    # never tried
+    use_new_attention_order: bool = False
+    resnet_two_cond: bool = False
+    resnet_cond_channels: int = None
+    # init the decoding conv layers with zero weights, this speeds up training
+    # default: True (BeattGANs)
+    resnet_use_zero_module: bool = True
+    # gradient checkpoint the attention operation
+    attn_checkpoint: bool = False
+
+    net_enc_num_res_blocks: int = 2
+    net_enc_channel_mult: Tuple[int] = None
+    net_enc_grad_checkpoint: bool = False
+    net_enc_attn_resolutions: Tuple[int]=None
+
+    def add_base(self):
+        super().inherit(self)
+
+    def make_model(self):
+        self.add_base()
+        return BaseModel(self)
+
+class BaseModel(nn.Module):
+    def __init__(self, conf, stop_pretrain_loading=False):
+        super().__init__()
+        self.conf = conf
+        self.encoder = self._setup_encoder_by_conf(conf)
+        self.decoder = self._setup_decoder_by_conf(conf)
+
+    def _setup_encoder_by_conf(self, conf):
+        model = BeatGANsAutoencConfig(
+            attention_resolutions=conf.attention_resolutions,
+            channel_mult=conf.channel_mult,
+            conv_resample=True,
+            dims=2,
+            dropout=conf.dropout,
+            embed_channels=conf.embed_channels,
+            enc_out_channels=1024,  # conf.style_ch,
+            enc_pool=conf.net_enc_pool,
+            enc_num_res_block=conf.net_enc_num_res_blocks,
+            enc_channel_mult=conf.net_enc_channel_mult,
+            enc_grad_checkpoint=conf.net_enc_grad_checkpoint,
+            enc_attn_resolutions=conf.net_enc_attn_resolutions,
+            enc_in_channels=conf.enc_in_channels,
+            image_size=conf.image_size,
+            in_channels=conf.in_channels,
+            model_channels=conf.model_channels,
+            num_classes=None,
+            num_head_channels=-1,
+            num_heads_upsample=-1,
+            num_heads=conf.num_heads,
+            num_res_blocks=conf.num_res_blocks,
+            num_input_res_blocks=conf.num_input_res_blocks,
+            out_channels=conf.out_channels,
+            resblock_updown=conf.resblock_updown,
+            use_checkpoint=conf.use_checkpoint,
+            use_new_attention_order=False,
+            resnet_two_cond=conf.resnet_two_cond,
+            resnet_use_zero_module=conf.resnet_use_zero_module,
+            latent_net_conf=None,
+            resnet_cond_channels=conf.enc_cond_vec_size,
+        ).make_model()
+        return model
+
+    def _setup_decoder_by_conf(self, conf):
+        model = BeatGANsAutoencConfig(
+            attention_resolutions=conf.attention_resolutions,
+            channel_mult=conf.channel_mult,
+            conv_resample=True,
+            dims=2,
+            dropout=conf.dropout,
+            embed_channels=conf.embed_channels,
+            enc_out_channels=1024,  # conf.style_ch,
+            enc_pool=conf.net_enc_pool,
+            enc_num_res_block=conf.net_enc_num_res_blocks,
+            enc_channel_mult=conf.net_enc_channel_mult,
+            enc_grad_checkpoint=conf.net_enc_grad_checkpoint,
+            enc_attn_resolutions=conf.net_enc_attn_resolutions,
+            image_size=conf.image_size,
+            in_channels=conf.dec_in_channels,
+            model_channels=conf.model_channels,
+            num_classes=None,
+            num_head_channels=-1,
+            num_heads_upsample=-1,
+            num_heads=conf.num_heads,
+            num_res_blocks=conf.num_res_blocks,
+            num_input_res_blocks=conf.num_input_res_blocks,
+            out_channels=conf.out_channels,
+            resblock_updown=conf.resblock_updown,
+            use_checkpoint=conf.use_checkpoint,
+            use_new_attention_order=False,
+            resnet_two_cond=conf.resnet_two_cond,
+            resnet_use_zero_module=conf.resnet_use_zero_module,
+            latent_net_conf=None,
+            resnet_cond_channels=conf.dec_cond_vec_size,
+        ).make_model()
+        return model
+
+    def forward(self, cover, hide, c_noise, sampler=None):
+        assert (sampler), 'Need to define a sampelr'
+        cover = cover.unsqueeze(0)
+        hide = hide.unsqueeze(0)
+        c_noise = c_noise.unsqueeze(0)
+
+        with torch.no_grad():
+            # Use concat to combine the inputs, and detach because we don't want to train the encoders
+            x_concat_sem = torch.concat((cover, hide), dim=1)
+            encode_cond = self.encoder.encode(x_concat_sem)['cond']
+            encoded = render_condition(self.conf, self.encoder, c_noise, sampler=sampler, cond=encode_cond)
+
+            decode_cond = self.decoder.encode(encoded)['cond']
+            decoded = render_condition(self.conf, self.decoder, c_noise, sampler=sampler, cond=decode_cond)
+
+        return BaseReturn(encoded=encoded, decoded=decoded)
+

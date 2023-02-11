@@ -1,44 +1,49 @@
-from model.unet import ScaleAt
-from model.latentnet import *
-from diffusion.resample import UniformSampler
-from diffusion.diffusion import space_timesteps
+import os
+from dataclasses import dataclass
 from typing import Tuple
+from multiprocessing import get_context
 
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
+from model.unet import ScaleAt
+from diffusion.resample import UniformSampler
+from diffusion.diffusion import space_timesteps
 from config_base import BaseConfig
 from dataset import *
 from diffusion import *
 from diffusion.base import GenerativeType, LossType, ModelMeanType, ModelVarType, get_named_beta_schedule
-from model import *
+from base_models import SteganConfig
 from choices import *
-from multiprocessing import get_context
-import os
 from dataset_util import *
-from torch.utils.data.distributed import DistributedSampler
 
 data_paths = {
     'ffhqlmdb256':
-    os.path.expanduser('datasets/ffhq256.lmdb'),
+        os.path.expanduser('datasets/ffhq256.lmdb'),
+
+    'ffhqlmdb128':
+        os.path.expanduser('datasets/ffhq128.lmdb'),
+    'ffhqlmdb128_steg':
+        os.path.expanduser('datasets/ffhq128.lmdb'),
     # used for training a classifier
     'celeba':
-    os.path.expanduser('datasets/celeba'),
+        os.path.expanduser('datasets/celeba'),
     # used for training DPM models
     'celebalmdb':
-    os.path.expanduser('datasets/celeba.lmdb'),
+        os.path.expanduser('datasets/celeba.lmdb'),
     'celebahq':
-    os.path.expanduser('datasets/celebahq256.lmdb'),
+        os.path.expanduser('datasets/celebahq256.lmdb'),
     'horse256':
-    os.path.expanduser('datasets/horse256.lmdb'),
+        os.path.expanduser('datasets/horse256.lmdb'),
     'bedroom256':
-    os.path.expanduser('datasets/bedroom256.lmdb'),
+        os.path.expanduser('datasets/bedroom256.lmdb'),
     'celeba_anno':
-    os.path.expanduser('datasets/celeba_anno/list_attr_celeba.txt'),
+        os.path.expanduser('datasets/celeba_anno/list_attr_celeba.txt'),
     'celebahq_anno':
-    os.path.expanduser(
-        'datasets/celeba_anno/CelebAMask-HQ-attribute-anno.txt'),
+        os.path.expanduser(
+            'datasets/celeba_anno/CelebAMask-HQ-attribute-anno.txt'),
     'celeba_relight':
-    os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
+        os.path.expanduser('datasets/celeba_hq_light/celeba_light.txt'),
 }
 
 
@@ -98,7 +103,7 @@ class TrainConfig(BaseConfig):
     lr: float = 0.0001
     optimizer: OptimizerType = OptimizerType.adam
     weight_decay: float = 0
-    model_conf: ModelConfig = None
+    model_conf = None
     model_name: ModelName = None
     model_type: ModelType = None
     net_attn: Tuple[int] = None
@@ -122,19 +127,6 @@ class TrainConfig(BaseConfig):
     net_enc_channel_mult: Tuple[int] = None
     net_enc_grad_checkpoint: bool = False
     net_autoenc_stochastic: bool = False
-    net_latent_activation: Activation = Activation.silu
-    net_latent_channel_mult: Tuple[int] = (1, 2, 4)
-    net_latent_condition_bias: float = 0
-    net_latent_dropout: float = 0
-    net_latent_layers: int = None
-    net_latent_net_last_act: Activation = Activation.none
-    net_latent_net_type: LatentNetType = LatentNetType.none
-    net_latent_num_hid_channels: int = 1024
-    net_latent_num_time_layers: int = 2
-    net_latent_skip_layers: Tuple[int] = None
-    net_latent_time_emb_channels: int = 64
-    net_latent_use_norm: bool = False
-    net_latent_time_last_act: bool = False
     net_num_res_blocks: int = 2
     # number of resblocks for the UNET
     net_num_input_res_blocks: int = None
@@ -301,39 +293,35 @@ class TrainConfig(BaseConfig):
                               original_resolution=None,
                               crop_d2c=True,
                               **kwargs)
+        elif self.data_name == 'ffhqlmdb128_steg':
+            # always use d2c crop
+            return StegFFHQlmdb(path=path or self.data_path,
+                                image_size=self.img_size,
+                                **kwargs)
         else:
             raise NotImplementedError()
 
-    def make_loader(self,
-                    dataset,
-                    shuffle: bool,
-                    num_worker: bool = None,
-                    drop_last: bool = True,
-                    batch_size: int = None,
-                    parallel: bool = False):
+    def make_loader(self, dataset, shuffle: bool, num_worker: bool = None, drop_last: bool = True,
+                    batch_size: int = None, parallel: bool = False):
         if parallel and distributed.is_initialized():
             # drop last to make sure that there is no added special indexes
-            sampler = DistributedSampler(dataset,
-                                         shuffle=shuffle,
-                                         drop_last=True)
+            sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=True)
         else:
             sampler = None
-        return DataLoader(
-            dataset,
-            batch_size=batch_size or self.batch_size,
-            sampler=sampler,
-            # with sampler, use the sample instead of this option
-            shuffle=False if sampler else shuffle,
-            num_workers=num_worker or self.num_workers,
-            pin_memory=True,
-            drop_last=drop_last,
-            multiprocessing_context=get_context('fork'),
-        )
+        return DataLoader(dataset, batch_size=batch_size or self.batch_size,
+                          sampler=sampler,
+                          # with sampler, use the sample instead of this option
+                          shuffle=False if sampler else shuffle,
+                          num_workers=num_worker or self.num_workers, pin_memory=True, drop_last=drop_last,
+                          multiprocessing_context=get_context('fork') if not self.debug else None)
 
     def make_model_conf(self):
-        if self.model_name == ModelName.beatgans_ddpm:
-            self.model_type = ModelType.ddpm
-            self.model_conf = BeatGANsUNetConfig(
+        if self.model_name == ModelName.steganography:
+            self.model_conf = SteganConfig(
+                enc_in_channels=6,
+                dec_in_channels=3,
+                enc_cond_vec_size=1024,
+                dec_cond_vec_size=512,
                 attention_resolutions=self.net_attn,
                 channel_mult=self.net_ch_mult,
                 conv_resample=True,
@@ -341,7 +329,6 @@ class TrainConfig(BaseConfig):
                 dropout=self.dropout,
                 embed_channels=self.net_beatgans_embed_channels,
                 image_size=self.img_size,
-                in_channels=3,
                 model_channels=self.net_ch,
                 num_classes=None,
                 num_head_channels=-1,
@@ -354,70 +341,8 @@ class TrainConfig(BaseConfig):
                 use_checkpoint=self.net_beatgans_gradient_checkpoint,
                 use_new_attention_order=False,
                 resnet_two_cond=self.net_beatgans_resnet_two_cond,
-                resnet_use_zero_module=self.
-                net_beatgans_resnet_use_zero_module,
-            )
-        elif self.model_name in [
-                ModelName.beatgans_autoenc,
-        ]:
-            cls = BeatGANsAutoencConfig
-            # supports both autoenc and vaeddpm
-            if self.model_name == ModelName.beatgans_autoenc:
-                self.model_type = ModelType.autoencoder
-            else:
-                raise NotImplementedError()
-
-            if self.net_latent_net_type == LatentNetType.none:
-                latent_net_conf = None
-            elif self.net_latent_net_type == LatentNetType.skip:
-                latent_net_conf = MLPSkipNetConfig(
-                    num_channels=self.style_ch,
-                    skip_layers=self.net_latent_skip_layers,
-                    num_hid_channels=self.net_latent_num_hid_channels,
-                    num_layers=self.net_latent_layers,
-                    num_time_emb_channels=self.net_latent_time_emb_channels,
-                    activation=self.net_latent_activation,
-                    use_norm=self.net_latent_use_norm,
-                    condition_bias=self.net_latent_condition_bias,
-                    dropout=self.net_latent_dropout,
-                    last_act=self.net_latent_net_last_act,
-                    num_time_layers=self.net_latent_num_time_layers,
-                    time_last_act=self.net_latent_time_last_act,
-                )
-            else:
-                raise NotImplementedError()
-
-            self.model_conf = cls(
-                attention_resolutions=self.net_attn,
-                channel_mult=self.net_ch_mult,
-                conv_resample=True,
-                dims=2,
-                dropout=self.dropout,
-                embed_channels=self.net_beatgans_embed_channels,
-                enc_out_channels=self.style_ch,
-                enc_pool=self.net_enc_pool,
-                enc_num_res_block=self.net_enc_num_res_blocks,
-                enc_channel_mult=self.net_enc_channel_mult,
-                enc_grad_checkpoint=self.net_enc_grad_checkpoint,
-                enc_attn_resolutions=self.net_enc_attn,
-                image_size=self.img_size,
-                in_channels=3,
-                model_channels=self.net_ch,
-                num_classes=None,
-                num_head_channels=-1,
-                num_heads_upsample=-1,
-                num_heads=self.net_beatgans_attn_head,
-                num_res_blocks=self.net_num_res_blocks,
-                num_input_res_blocks=self.net_num_input_res_blocks,
-                out_channels=self.model_out_channels,
-                resblock_updown=self.net_resblock_updown,
-                use_checkpoint=self.net_beatgans_gradient_checkpoint,
-                use_new_attention_order=False,
-                resnet_two_cond=self.net_beatgans_resnet_two_cond,
-                resnet_use_zero_module=self.
-                net_beatgans_resnet_use_zero_module,
-                latent_net_conf=latent_net_conf,
-                resnet_cond_channels=self.net_beatgans_resnet_cond_channels,
+                resnet_use_zero_module=self.net_beatgans_resnet_use_zero_module,
+                net_enc_pool=self.net_enc_pool,
             )
         else:
             raise NotImplementedError(self.model_name)

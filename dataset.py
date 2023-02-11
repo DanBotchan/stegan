@@ -190,6 +190,73 @@ class FFHQlmdb(Dataset):
         return {'img': img, 'index': index}
 
 
+
+class StegFFHQlmdb(Dataset):
+    def __init__(self,
+                 path=os.path.expanduser('datasets/ffhq128.lmdb'),
+                 noise_path='datasets/noises',
+                 image_size=256,
+                 original_resolution=256,
+                 split=None,
+                 as_tensor: bool = True,
+                 do_augment: bool = True,
+                 do_normalize: bool = True,
+                 **kwargs):
+        self.noise_path = noise_path
+        self.original_resolution = original_resolution
+        self.data = BaseLMDB(path, original_resolution, zfill=5)
+        self.data_length = len(self.data)
+
+        # Need even number of data points.
+        if not self.data_length % 2 == 0:
+            self.data_length -= 1
+        self.length = int(self.data_length / 2)
+
+        if split is None:
+            self.offset = 0
+        elif split == 'train':
+            # last 60k
+            self.length = self.length - 5000
+            self.offset = 5000
+        elif split == 'test':
+            # first 10k
+            self.length = 5000
+            self.offset = 0
+        else:
+            raise NotImplementedError()
+
+        transform = [
+            transforms.Resize(image_size),
+        ]
+        if do_augment:
+            transform.append(transforms.RandomHorizontalFlip())
+        if as_tensor:
+            transform.append(transforms.ToTensor())
+        if do_normalize:
+            transform.append(
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        self.transform = transforms.Compose(transform)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        assert index < self.length
+        cover_index = index + self.offset
+        hide_index = cover_index + self.length
+        hide = self.data[hide_index]
+        cover = self.data[cover_index]
+        if self.transform is not None:
+            hide = self.transform(hide)
+            cover = self.transform(cover)
+        noise_path = os.path.join(self.noise_path, f'noise_{index:05}.pt')
+        if os.path.exists(noise_path):
+            noise = torch.load(noise_path)
+        else:
+            noise = torch.randn_like(cover)
+        return {'hide': hide, 'cover': cover, 'noise': noise,  'index': cover_index, 'hide_index': hide_index}
+
+
 class Crop:
     def __init__(self, x1, x2, y1, y2):
         self.x1 = x1
