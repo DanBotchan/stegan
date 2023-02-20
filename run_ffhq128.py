@@ -5,13 +5,14 @@ if __name__ == '__main__':
 
     debug = True
     if debug:
-        gpus = []
+        gpus = [0]
     else:
-        gpus = [0, 1, 2, 3]
+        gpus = [3,4]
     scale_up_gpus = len(gpus) if len(gpus) > 0 else 1
 
     conf = stegan_config(debug=debug, scale_up_gpus=scale_up_gpus)
-    conf.name = 'experiment_date'
+    conf.name = 'debug_semantics'
+    conf.sample_on_train_start = False
 
     train(conf, gpus=gpus)
 

@@ -5,7 +5,7 @@ import re
 import numpy as np
 import pytorch_lightning as pl
 from torch.optim.optimizer import Optimizer
-from torch.utils.data.dataset import TensorDataset
+from torch.autograd import grad
 from torch.cuda import amp
 from torchvision.utils import make_grid, save_image
 
@@ -14,6 +14,7 @@ from config import TrainConfig, TrainMode
 from dist_utils import get_world_size
 from choices import OptimizerType
 from utils import WarmupLR, show_tensor_image, is_time
+from metrics import evaluate_fid, evaluate_lpips
 
 
 class LitModel(pl.LightningModule):
@@ -26,7 +27,7 @@ class LitModel(pl.LightningModule):
         self.save_hyperparameters(conf.as_dict_jsonable())
 
         self.conf = conf
-
+        self.stegan_type = self.conf.stegan_type
         self.model = conf.make_model_conf().make_model()
 
         model_size = 0
@@ -46,7 +47,7 @@ class LitModel(pl.LightningModule):
         self.conds_mean = None
         self.conds_std = None
 
-        if conf.pretrain is not None:
+        if conf.encoder_pretrain is not None:
             print(f'loading pretrain ... {conf.pretrain.name}')
             state = torch.load(conf.pretrain.path, map_location='cpu')
             print('step:', state['global_step'])
@@ -72,20 +73,13 @@ class LitModel(pl.LightningModule):
             sampler = self.eval_sampler
         else:
             sampler = self.conf._make_diffusion_conf(T).make_sampler()
-        out = sampler.ddim_reverse_sample_loop(self.ema_model,
-                                               x,
-                                               model_kwargs={'cond': cond})
+        out = sampler.ddim_reverse_sample_loop(self.ema_model, x, model_kwargs={'cond': cond})
         return out['sample']
 
     def forward(self, noise=None, x_start=None, ema_model: bool = False):
         with amp.autocast(False):
-            if ema_model:
-                model = self.ema_model
-            else:
-                model = self.model
-            gen = self.eval_sampler.sample(model=model,
-                                           noise=noise,
-                                           x_start=x_start)
+            model = self.model
+            gen = self.eval_sampler.sample(model=model, noise=noise, x_start=x_start)
             return gen
 
     def setup(self, stage=None) -> None:
@@ -102,9 +96,9 @@ class LitModel(pl.LightningModule):
             print('local seed:', seed)
         ##############################################
 
-        self.train_data = self.conf.make_dataset()
+        self.train_data = self.conf.make_dataset(split='train')
         print('train data:', len(self.train_data))
-        self.val_data = self.train_data
+        self.val_data = self.conf.make_dataset(split='val')
         print('val data:', len(self.val_data))
 
     def _train_dataloader(self, drop_last=True):
@@ -120,28 +114,26 @@ class LitModel(pl.LightningModule):
 
     def train_dataloader(self):
         """
-        return the dataloader, if diffusion mode => return image dataset
-        if latent mode => return the inferred latent dataset
         """
         print('on train dataloader start ...')
-        if self.conf.train_mode.require_dataset_infer():
-            if self.conds is None:
-                # usually we load self.conds from a file
-                # so we do not need to do this again!
-                self.conds = self.infer_whole_dataset()
-                # need to use float32! unless the mean & std will be off!
-                # (1, c)
-                self.conds_mean.data = self.conds.float().mean(dim=0, keepdim=True)
-                self.conds_std.data = self.conds.float().std(dim=0, keepdim=True)
-            print('mean:', self.conds_mean.mean(), 'std:', self.conds_std.mean())
+        return self._train_dataloader()
 
-            # return the dataset with pre-calculated conds
-            conf = self.conf.clone()
-            conf.batch_size = self.batch_size
-            data = TensorDataset(self.conds)
-            return conf.make_loader(data, shuffle=True)
-        else:
-            return self._train_dataloader()
+    def _val_dataloader(self, drop_last=True):
+        """
+        really make the dataloader
+        """
+        # make sure to use the fraction of batch size
+        # the batch size is global!
+        conf = self.conf.clone()
+        conf.batch_size = self.batch_size
+        dataloader = conf.make_loader(self.val_data, shuffle=False, drop_last=drop_last)
+        return dataloader
+
+    def val_dataloader(self):
+        """
+        """
+        print('on bsl dataloader start ...')
+        return self._val_dataloader()
 
     @property
     def batch_size(self):
@@ -168,102 +160,6 @@ class LitModel(pl.LightningModule):
         """
         return (batch_idx + 1) % self.conf.accum_batches == 0
 
-    def infer_whole_dataset(self,
-                            with_render=False,
-                            T_render=None,
-                            render_save_path=None):
-        """
-        predicting the latents given images using the encoder
-
-        Args:
-            both_flips: include both original and flipped images; no need, it's not an improvement
-            with_render: whether to also render the images corresponding to that latent
-            render_save_path: lmdb output for the rendered images
-        """
-        data = self.conf.make_dataset()
-        if isinstance(data, CelebAlmdb) and data.crop_d2c:
-            # special case where we need the d2c crop
-            data.transform = make_transform(self.conf.img_size,
-                                            flip_prob=0,
-                                            crop_d2c=True)
-        else:
-            data.transform = make_transform(self.conf.img_size, flip_prob=0)
-
-        # data = SubsetDataset(data, 21)
-
-        loader = self.conf.make_loader(
-            data,
-            shuffle=False,
-            drop_last=False,
-            batch_size=self.conf.batch_size_eval,
-            parallel=True,
-        )
-        model = self.ema_model
-        model.eval()
-        conds = []
-
-        if with_render:
-            sampler = self.conf._make_diffusion_conf(
-                T=T_render or self.conf.T_eval).make_sampler()
-
-            if self.global_rank == 0:
-                writer = LMDBImageWriter(render_save_path,
-                                         format='webp',
-                                         quality=100)
-            else:
-                writer = nullcontext()
-        else:
-            writer = nullcontext()
-
-        with writer:
-            for batch in tqdm(loader, total=len(loader), desc='infer'):
-                with torch.no_grad():
-                    # (n, c)
-                    # print('idx:', batch['index'])
-                    cond = model.encoder(batch['img'].to(self.device))
-
-                    # used for reordering to match the original dataset
-                    idx = batch['index']
-                    idx = self.all_gather(idx)
-                    if idx.dim() == 2:
-                        idx = idx.flatten(0, 1)
-                    argsort = idx.argsort()
-
-                    if with_render:
-                        noise = torch.randn(len(cond),
-                                            3,
-                                            self.conf.img_size,
-                                            self.conf.img_size,
-                                            device=self.device)
-                        render = sampler.sample(model, noise=noise, cond=cond)
-                        render = (render + 1) / 2
-                        # print('render:', render.shape)
-                        # (k, n, c, h, w)
-                        render = self.all_gather(render)
-                        if render.dim() == 5:
-                            # (k*n, c)
-                            render = render.flatten(0, 1)
-
-                        # print('global_rank:', self.global_rank)
-
-                        if self.global_rank == 0:
-                            writer.put_images(render[argsort])
-
-                    # (k, n, c)
-                    cond = self.all_gather(cond)
-
-                    if cond.dim() == 3:
-                        # (k*n, c)
-                        cond = cond.flatten(0, 1)
-
-                    conds.append(cond[argsort].cpu())
-                # break
-        model.train()
-        # (N, c) cpu
-
-        conds = torch.cat(conds).float()
-        return conds
-
     def training_step(self, batch, batch_idx):
         """
         given an input, calculate the loss function
@@ -274,11 +170,12 @@ class LitModel(pl.LightningModule):
             cover, hide, noise = batch['cover'], batch['hide'], batch['noise']
             batch_size = cover.shape[0]
             device = cover.device
-            x_start_conatcat = torch.concat((cover, hide), dim=1).detach()
 
-            """
-            main training mode!!!
-            """
+            if self.conf.sample_on_train_start:
+                self.log_sample(cover=cover, hide=hide, noise=noise, mode='log_on_start')
+                self.conf.sample_on_train_start = False
+
+            x_start_conatcat = torch.concat((cover, hide), dim=1).detach()
             # with numpy seed we have the problem that the sample t's are related!
             t, weight = self.T_sampler.sample(batch_size, device)
             encoder_losses = self.sampler.training_losses(model=self.model.encoder, x_start=x_start_conatcat, t=t,
@@ -302,6 +199,7 @@ class LitModel(pl.LightningModule):
                 self.logger.experiment.add_scalar('Encoder Loss', encoder_losses['loss'], self.num_samples)
                 self.logger.experiment.add_scalar('Decoder Loss', decoder_losses['loss'], self.num_samples)
 
+            self.log('train_loss', loss, on_epoch=True)
         return {'loss': loss}
 
     def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
@@ -311,8 +209,21 @@ class LitModel(pl.LightningModule):
         if self.is_last_accum(batch_idx):
             # logging
             cover, hide, noise = batch['cover'], batch['hide'], batch['noise']
-            self.log_sample(cover=cover, hide=hide, noise=noise)
-            self.evaluate_scores()
+            self.log_sample(cover=cover, hide=hide, noise=noise, mode='train')
+            # TODO: Finish implementing this!
+            # self.evaluate_scores()
+
+    def validation_step(self, batch, batch_idx):
+        """
+        given an input, calculate the loss function
+        no optimization at this stage.
+        """
+
+        # logging
+        cover, hide, noise = batch['cover'], batch['hide'], batch['noise']
+        self.log_sample(cover=cover, hide=hide, noise=noise, mode='eval')
+        # TODO: Finish implementing this!
+        return
 
     def on_before_optimizer_step(self, optimizer: Optimizer,
                                  optimizer_idx: int) -> None:
@@ -325,10 +236,13 @@ class LitModel(pl.LightningModule):
             torch.nn.utils.clip_grad_norm_(params, max_norm=self.conf.grad_clip)
             # print('after:', grads_norm(iter_opt_params(optimizer)))
 
-    def log_sample(self, cover, hide, noise):
+    def log_sample(self, cover, hide, noise, mode='train'):
         """
         put images to the tensorboard
         """
+        is_time_to_sample = self.conf.sample_every_samples > 0 and is_time(self.num_samples,
+                                                                           self.conf.sample_every_samples,
+                                                                           self.conf.batch_size_effective)
 
         def do(model, postfix, save_real=False):
             model.eval()
@@ -343,7 +257,7 @@ class LitModel(pl.LightningModule):
                 encoded_imgs = self.all_gather(torch.cat(l_encoded))
                 decoded_imgs = self.all_gather(torch.cat(l_decoded))
 
-                if encoded_imgs.dim() == 5 or encoded_imgs:
+                if encoded_imgs.dim() == 5:
                     # (n, c, h, w)
                     encoded_imgs = encoded_imgs.flatten(0, 1)
 
@@ -401,9 +315,12 @@ class LitModel(pl.LightningModule):
 
             model.train()
 
-        if self.conf.sample_every_samples > 0 and is_time(self.num_samples, self.conf.sample_every_samples,
-                                                          self.conf.batch_size_effective):
-            do(self.model, '_enc', save_real=True)
+        if mode == 'eval':
+            do(self.model, '_eval', save_real=True)
+        elif mode == 'train' and is_time_to_sample:
+            do(self.model, '_train', save_real=True)
+        elif mode == 'log_on_start':
+            do(self.model, '_log_on_star', save_real=True)
 
     def evaluate_scores(self):
         """
@@ -413,58 +330,32 @@ class LitModel(pl.LightningModule):
         """
 
         def fid(model, postfix):
-            score = evaluate_fid(self.eval_sampler,
-                                 model,
-                                 self.conf,
-                                 device=self.device,
-                                 train_data=self.train_data,
-                                 val_data=self.val_data,
-                                 latent_sampler=self.eval_latent_sampler,
-                                 conds_mean=self.conds_mean,
-                                 conds_std=self.conds_std)
+            score = evaluate_fid(self.eval_sampler, model, self.conf, device=self.device, train_data=self.train_data,
+                                 val_data=self.val_data)
             if self.global_rank == 0:
-                self.logger.experiment.add_scalar(f'FID{postfix}', score,
-                                                  self.num_samples)
+                self.logger.experiment.add_scalar(f'FID{postfix}', score, self.num_samples)
                 if not os.path.exists(self.conf.logdir):
                     os.makedirs(self.conf.logdir)
-                with open(os.path.join(self.conf.logdir, 'eval.txt'),
-                          'a') as f:
-                    metrics = {
-                        f'FID{postfix}': score,
-                        'num_samples': self.num_samples,
-                    }
+                with open(os.path.join(self.conf.logdir, 'eval.txt'), 'a') as f:
+                    metrics = {f'FID{postfix}': score, 'num_samples': self.num_samples}
                     f.write(json.dumps(metrics) + "\n")
 
         def lpips(model, postfix):
-            if self.conf.model_type.has_autoenc(
-            ) and self.conf.train_mode.is_autoenc():
+            if self.conf.model_type.has_autoenc() and self.conf.train_mode.is_autoenc():
                 # {'lpips', 'ssim', 'mse'}
-                score = evaluate_lpips(self.eval_sampler,
-                                       model,
-                                       self.conf,
-                                       device=self.device,
-                                       val_data=self.val_data,
+                score = evaluate_lpips(self.eval_sampler, model, self.conf, device=self.device, val_data=self.val_data,
                                        latent_sampler=self.eval_latent_sampler)
 
                 if self.global_rank == 0:
                     for key, val in score.items():
-                        self.logger.experiment.add_scalar(
-                            f'{key}{postfix}', val, self.num_samples)
+                        self.logger.experiment.add_scalar(f'{key}{postfix}', val, self.num_samples)
 
-        if self.conf.eval_every_samples > 0 and self.num_samples > 0 and is_time(
-                self.num_samples, self.conf.eval_every_samples,
-                self.conf.batch_size_effective):
+        if self.conf.eval_every_samples > 0 and self.num_samples > 0 and is_time(self.num_samples,
+                                                                                 self.conf.eval_every_samples,
+                                                                                 self.conf.batch_size_effective):
             print(f'eval fid @ {self.num_samples}')
             lpips(self.model, '')
             fid(self.model, '')
-
-        if self.conf.eval_ema_every_samples > 0 and self.num_samples > 0 and is_time(
-                self.num_samples, self.conf.eval_ema_every_samples,
-                self.conf.batch_size_effective):
-            print(f'eval fid ema @ {self.num_samples}')
-            fid(self.ema_model, '_ema')
-            # it's too slow
-            # lpips(self.ema_model, '_ema')
 
     def configure_optimizers(self):
         out = {}

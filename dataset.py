@@ -193,8 +193,8 @@ class FFHQlmdb(Dataset):
 
 class StegFFHQlmdb(Dataset):
     def __init__(self,
-                 path=os.path.expanduser('datasets/ffhq128.lmdb'),
-                 noise_path='datasets/noises',
+                 path=os.path.expanduser('/mnt/raid/home/dan_botchan/projects/stegan/datasets/ffhq128.lmdb'),
+                 noise_path='/mnt/raid/home/dan_botchan/projects/stegan/datasets/noises',
                  image_size=256,
                  original_resolution=256,
                  split=None,
@@ -216,11 +216,11 @@ class StegFFHQlmdb(Dataset):
             self.offset = 0
         elif split == 'train':
             # last 60k
-            self.length = self.length - 5000
-            self.offset = 5000
-        elif split == 'test':
+            self.length = self.length - 200
+            self.offset = 200
+        elif split == 'val':
             # first 10k
-            self.length = 5000
+            self.length = 200
             self.offset = 0
         else:
             raise NotImplementedError()

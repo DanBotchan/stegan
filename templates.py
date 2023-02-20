@@ -9,7 +9,10 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     conf = TrainConfig()
     conf.debug = debug
 
-    conf.num_workers = 32 if not debug else 0
+    conf.stegan_type = SteganType.semantics
+    conf.encoder_pretrain = 'checkpoints/ffhq128_autoenc_130M/last.ckpt'
+
+    conf.num_workers = 24 if not debug else 0
     conf.batch_size = 10 if not debug else 1
 
     conf.name = 'experiment_date'
@@ -21,14 +24,13 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     conf.scale_up_gpus(scale_up_gpus)
 
     conf.fp16 = True
-    conf.lr = 1e-4
+    conf.lr = 0.5e-4
 
-    conf.eval_ema_every_samples = 10_000_000
     conf.eval_every_samples = 10_000_000
     conf.sample_every_samples = 20_000
     conf.sample_size = 32
 
-    conf.T_eval = 20
+    conf.T_eval = 80
     conf.T = 80
 
     conf.net_attn = (16,)
@@ -42,6 +44,8 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     # final resolution = 8x8
     conf.net_ch_mult = (1, 1, 2, 3, 4)
     # final resolution = 4x4
+    conf.net_enc_out = 1024 if conf.stegan_type == SteganType.images else 512
+    conf.enc_in_channels = 6 if conf.stegan_type == SteganType.images else 3
     conf.net_enc_channel_mult = (1, 1, 2, 3, 4, 4)
     conf.make_model_conf()
     return conf

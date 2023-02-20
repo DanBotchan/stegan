@@ -17,6 +17,7 @@ from torch.cuda.amp import autocast
 from config_base import BaseConfig
 from utils import show_tensor_image
 
+
 @dataclass
 class GaussianDiffusionBeatGansConfig(BaseConfig):
     gen_type: GenerativeType
@@ -93,11 +94,7 @@ class GaussianDiffusionBeatGans:
                                      np.sqrt(alphas) /
                                      (1.0 - self.alphas_cumprod))
 
-    def training_losses(self,
-                        model: Model,
-                        x_start: th.Tensor,
-                        t: th.Tensor,
-                        model_kwargs=None,
+    def training_losses(self, model: Model, x_start: th.Tensor, t: th.Tensor, model_kwargs=None,
                         noise: th.Tensor = None):
         """
         Compute training losses for a single timestep.
@@ -162,15 +159,8 @@ class GaussianDiffusionBeatGans:
 
         return terms
 
-    def sample(self,
-               model: Model,
-               shape=None,
-               noise=None,
-               cond=None,
-               x_start=None,
-               clip_denoised=True,
-               model_kwargs=None,
-               progress=False):
+    def sample(self, model: Model, shape=None, noise=None, cond=None, x_start=None, clip_denoised=True,
+               model_kwargs=None, progress=False):
         """
         Args:
             x_start: given for the autoencoder
@@ -182,19 +172,11 @@ class GaussianDiffusionBeatGans:
                 model_kwargs['cond'] = cond
 
         if self.conf.gen_type == GenerativeType.ddpm:
-            return self.p_sample_loop(model,
-                                      shape=shape,
-                                      noise=noise,
-                                      clip_denoised=clip_denoised,
-                                      model_kwargs=model_kwargs,
-                                      progress=progress)
+            return self.p_sample_loop(model, shape=shape, noise=noise, clip_denoised=clip_denoised,
+                                      model_kwargs=model_kwargs, progress=progress)
         elif self.conf.gen_type == GenerativeType.ddim:
-            return self.ddim_sample_loop(model,
-                                         shape=shape,
-                                         noise=noise,
-                                         clip_denoised=clip_denoised,
-                                         model_kwargs=model_kwargs,
-                                         progress=progress)
+            return self.ddim_sample_loop(model, shape=shape, noise=noise, clip_denoised=clip_denoised,
+                                         model_kwargs=model_kwargs, progress=progress)
         else:
             raise NotImplementedError()
 
@@ -565,52 +547,29 @@ class GaussianDiffusionBeatGans:
                 yield out
                 img = out["sample"]
 
-    def ddim_sample(
-            self,
-            model: Model,
-            x,
-            t,
-            clip_denoised=True,
-            denoised_fn=None,
-            cond_fn=None,
-            model_kwargs=None,
-            eta=0.0,
-    ):
+    def ddim_sample(self, model: Model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None,
+                    eta=0.0):
         """
         Sample x_{t-1} from the model using DDIM.
 
         Same usage as p_sample().
         """
-        out = self.p_mean_variance(
-            model,
-            x,
-            t,
-            clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn,
-            model_kwargs=model_kwargs,
-        )
+        out = self.p_mean_variance(model, x, t, clip_denoised=clip_denoised, denoised_fn=denoised_fn,
+                                   model_kwargs=model_kwargs)
         if cond_fn is not None:
-            out = self.condition_score(cond_fn,
-                                       out,
-                                       x,
-                                       t,
-                                       model_kwargs=model_kwargs)
+            out = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
 
         # Usually our model outputs epsilon, but we re-derive it
         # in case we used x_start or x_prev prediction.
         eps = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
 
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-        alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t,
-                                              x.shape)
-        sigma = (eta * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar)) *
-                 th.sqrt(1 - alpha_bar / alpha_bar_prev))
+        alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
+        sigma = (eta * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar)) * th.sqrt(1 - alpha_bar / alpha_bar_prev))
         # Equation 12.
-        noise = th.randn_like(x)
-        mean_pred = (out["pred_xstart"] * th.sqrt(alpha_bar_prev) +
-                     th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps)
-        nonzero_mask = ((t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
-                        )  # no noise when t == 0
+        noise = model_kwargs['o_noise']  # th.randn_like(x)
+        mean_pred = (out["pred_xstart"] * th.sqrt(alpha_bar_prev) + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps)
+        nonzero_mask = ((t != 0).float().view(-1, *([1] * (len(x.shape) - 1))))  # no noise when t == 0
         sample = mean_pred + nonzero_mask * sigma * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
@@ -626,7 +585,7 @@ class GaussianDiffusionBeatGans:
     ):
         """
         Sample x_{t+1} from the model using DDIM reverse ODE.
-        NOTE: never used ? 
+        NOTE: never used ?
         """
         assert eta == 0.0, "Reverse ODE only for deterministic path"
         out = self.p_mean_variance(
@@ -697,53 +656,23 @@ class GaussianDiffusionBeatGans:
             'T': T,
         }
 
-    def ddim_sample_loop(
-            self,
-            model: Model,
-            shape=None,
-            noise=None,
-            clip_denoised=True,
-            denoised_fn=None,
-            cond_fn=None,
-            model_kwargs=None,
-            device=None,
-            progress=False,
-            eta=0.0,
-    ):
+    def ddim_sample_loop(self, model: Model, shape=None, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None,
+                         model_kwargs=None, device=None, progress=False, eta=0.0):
         """
         Generate samples from the model using DDIM.
 
         Same usage as p_sample_loop().
         """
         final = None
-        for sample in self.ddim_sample_loop_progressive(
-                model,
-                shape,
-                noise=noise,
-                clip_denoised=clip_denoised,
-                denoised_fn=denoised_fn,
-                cond_fn=cond_fn,
-                model_kwargs=model_kwargs,
-                device=device,
-                progress=progress,
-                eta=eta,
-        ):
+        for sample in self.ddim_sample_loop_progressive(model, shape, noise=noise, clip_denoised=clip_denoised,
+                                                        denoised_fn=denoised_fn, cond_fn=cond_fn,
+                                                        model_kwargs=model_kwargs, device=device, progress=progress,
+                                                        eta=eta):
             final = sample
         return final["sample"]
 
-    def ddim_sample_loop_progressive(
-            self,
-            model: Model,
-            shape=None,
-            noise=None,
-            clip_denoised=True,
-            denoised_fn=None,
-            cond_fn=None,
-            model_kwargs=None,
-            device=None,
-            progress=False,
-            eta=0.0,
-    ):
+    def ddim_sample_loop_progressive(self, model: Model, shape=None, noise=None, clip_denoised=True, denoised_fn=None,
+                                     cond_fn=None, model_kwargs=None, device=None, progress=False, eta=0.0):
         """
         Use DDIM to sample from the model and yield intermediate samples from
         each timestep of DDIM.
@@ -766,7 +695,6 @@ class GaussianDiffusionBeatGans:
             indices = tqdm(indices)
 
         for i in indices:
-
             if isinstance(model_kwargs, list):
                 # index dependent model kwargs
                 # (T-1, ..., 0)
@@ -776,16 +704,8 @@ class GaussianDiffusionBeatGans:
 
             t = th.tensor([i] * len(img), device=device)
             with th.no_grad():
-                out = self.ddim_sample(
-                    model,
-                    img,
-                    t,
-                    clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn,
-                    cond_fn=cond_fn,
-                    model_kwargs=_kwargs,
-                    eta=eta,
-                )
+                out = self.ddim_sample(model, img, t, clip_denoised=clip_denoised, denoised_fn=denoised_fn,
+                                       cond_fn=cond_fn, model_kwargs=_kwargs, eta=eta)
                 out['t'] = t
                 yield out
                 img = out["sample"]

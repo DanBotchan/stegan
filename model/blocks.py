@@ -21,8 +21,9 @@ class TimestepBlock(nn.Module):
     """
     Any module where forward() takes timestep embeddings as a second argument.
     """
+
     @abstractmethod
-    def forward(self, x, emb=None, cond=None, lateral=None):
+    def forward(self, x, emb=None, cond=None, h_cond=None, lateral=None):
         """
         Apply the module to `x` given `emb` timestep embeddings.
         """
@@ -33,10 +34,11 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     A sequential module that passes timestep embeddings to the children that
     support it as an extra input.
     """
-    def forward(self, x, emb=None, cond=None, lateral=None):
+
+    def forward(self, x, emb=None, cond=None, h_cond=None, lateral=None):
         for layer in self:
             if isinstance(layer, TimestepBlock):
-                x = layer(x, emb=emb, cond=cond, lateral=lateral)
+                x = layer(x, emb=emb, cond=cond, h_cond=h_cond, lateral=lateral)
             else:
                 x = layer(x)
         return x
@@ -92,6 +94,7 @@ class ResBlock(TimestepBlock):
         - act
         - conv
     """
+
     def __init__(self, conf: ResBlockConfig):
         super().__init__()
         self.conf = conf
@@ -100,11 +103,8 @@ class ResBlock(TimestepBlock):
         # IN LAYERS
         #############################
         assert conf.lateral_channels is None
-        layers = [
-            normalization(conf.channels),
-            nn.SiLU(),
-            conv_nd(conf.dims, conf.channels, conf.out_channels, 3, padding=1)
-        ]
+        layers = [normalization(conf.channels), nn.SiLU(),
+                  conv_nd(conf.dims, conf.channels, conf.out_channels, 3, padding=1)]
         self.in_layers = nn.Sequential(*layers)
 
         self.updown = conf.up or conf.down
@@ -123,25 +123,15 @@ class ResBlock(TimestepBlock):
         #############################
         if conf.use_condition:
             # condition layers for the out_layers
-            self.emb_layers = nn.Sequential(
-                nn.SiLU(),
-                linear(conf.emb_channels, 2 * conf.out_channels),
-            )
+            self.emb_layers = nn.Sequential(nn.SiLU(), linear(conf.emb_channels, 2 * conf.out_channels))
 
             if conf.two_cond:
-                self.cond_emb_layers = nn.Sequential(
-                    nn.SiLU(),
-                    linear(conf.cond_emb_channels, conf.out_channels),
-                )
+                self.cond_emb_layers = nn.Sequential(nn.SiLU(), linear(conf.cond_emb_channels, conf.out_channels))
             #############################
             # OUT LAYERS (ignored when there is no condition)
             #############################
             # original version
-            conv = conv_nd(conf.dims,
-                           conf.out_channels,
-                           conf.out_channels,
-                           3,
-                           padding=1)
+            conv = conv_nd(conf.dims, conf.out_channels, conf.out_channels, 3, padding=1)
             if conf.use_zero_module:
                 # zere out the weights
                 # it seems to help training
@@ -154,12 +144,7 @@ class ResBlock(TimestepBlock):
             # - dropout
             # - conv
             layers = []
-            layers += [
-                normalization(conf.out_channels),
-                nn.SiLU(),
-                nn.Dropout(p=conf.dropout),
-                conv,
-            ]
+            layers += [normalization(conf.out_channels), nn.SiLU(), nn.Dropout(p=conf.dropout), conv]
             self.out_layers = nn.Sequential(*layers)
 
         #############################
@@ -176,13 +161,9 @@ class ResBlock(TimestepBlock):
                 kernel_size = 1
                 padding = 0
 
-            self.skip_connection = conv_nd(conf.dims,
-                                           conf.channels,
-                                           conf.out_channels,
-                                           kernel_size,
-                                           padding=padding)
+            self.skip_connection = conv_nd(conf.dims, conf.channels, conf.out_channels, kernel_size, padding=padding)
 
-    def forward(self, x, emb=None, cond=None, lateral=None):
+    def forward(self, x, emb=None, cond=None, h_cond=None, lateral=None):
         """
         Apply the block to a Tensor, conditioned on a timestep embedding.
 
@@ -190,16 +171,9 @@ class ResBlock(TimestepBlock):
             x: input
             lateral: lateral connection from the encoder
         """
-        return torch_checkpoint(self._forward, (x, emb, cond, lateral),
-                                self.conf.use_checkpoint)
+        return torch_checkpoint(self._forward, (x, emb, cond, h_cond, lateral), self.conf.use_checkpoint)
 
-    def _forward(
-        self,
-        x,
-        emb=None,
-        cond=None,
-        lateral=None,
-    ):
+    def _forward(self, x, emb=None, cond=None, h_cond=None, lateral=None):
         """
         Args:
             lateral: required if "has_lateral" and non-gated, with gated, it can be supplied optionally    
@@ -237,6 +211,11 @@ class ResBlock(TimestepBlock):
                 else:
                     cond_out = self.cond_emb_layers(cond).type(h.dtype)
 
+                if h_cond is None:
+                    h_cond_out = None
+                else:
+                    h_cond_out = self.cond_emb_layers(h_cond).type(h.dtype)
+
                 if cond_out is not None:
                     while len(cond_out.shape) < len(h.shape):
                         cond_out = cond_out[..., None]
@@ -244,36 +223,22 @@ class ResBlock(TimestepBlock):
                 cond_out = None
 
             # this is the new refactored code
-            h = apply_conditions(
-                h=h,
-                emb=emb_out,
-                cond=cond_out,
-                layers=self.out_layers,
-                scale_bias=1,
-                in_channels=self.conf.out_channels,
-                up_down_layer=None,
-            )
+            h = apply_conditions(h=h, emb=emb_out, cond=cond_out, cond_three=h_cond_out, layers=self.out_layers,
+                                 scale_bias=1, in_channels=self.conf.out_channels, up_down_layer=None)
 
         return self.skip_connection(x) + h
 
 
-def apply_conditions(
-    h,
-    emb=None,
-    cond=None,
-    layers: nn.Sequential = None,
-    scale_bias: float = 1,
-    in_channels: int = 512,
-    up_down_layer: nn.Module = None,
-):
+def apply_conditions(h, emb=None, cond=None, cond_three=None, layers: nn.Sequential = None, scale_bias: float = 1,
+                     in_channels: int = 512, up_down_layer: nn.Module = None):
     """
     apply conditions on the feature maps
-
     Args:
         emb: time conditional (ready to scale + shift)
         cond: encoder's conditional (read to scale + shift)
     """
-    two_cond = emb is not None and cond is not None
+    three_cond = emb is not None and cond is not None and cond_three is not None
+    two_cond = emb is not None and cond is not None and not cond_three
 
     if emb is not None:
         # adjusting shapes
@@ -286,6 +251,13 @@ def apply_conditions(
             cond = cond[..., None]
         # time first
         scale_shifts = [emb, cond]
+    elif three_cond:
+        # adjusting shapes
+        while len(cond.shape) < len(h.shape):
+            cond = cond[..., None]
+            cond_three = cond_three[..., None]
+        # time first
+        scale_shifts = [emb, cond, cond_three]
     else:
         # "cond" is not used with single cond mode
         scale_shifts = [emb]
@@ -344,6 +316,7 @@ class Upsample(nn.Module):
     :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then
                  upsampling occurs in the inner-two dimensions.
     """
+
     def __init__(self, channels, use_conv, dims=2, out_channels=None):
         super().__init__()
         self.channels = channels
@@ -378,6 +351,7 @@ class Downsample(nn.Module):
     :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then
                  downsampling occurs in the inner-two dimensions.
     """
+
     def __init__(self, channels, use_conv, dims=2, out_channels=None):
         super().__init__()
         self.channels = channels
@@ -408,13 +382,14 @@ class AttentionBlock(nn.Module):
     Originally ported from here, but adapted to the N-d case.
     https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/models/unet.py#L66.
     """
+
     def __init__(
-        self,
-        channels,
-        num_heads=1,
-        num_head_channels=-1,
-        use_checkpoint=False,
-        use_new_attention_order=False,
+            self,
+            channels,
+            num_heads=1,
+            num_head_channels=-1,
+            use_checkpoint=False,
+            use_new_attention_order=False,
     ):
         super().__init__()
         self.channels = channels
@@ -422,7 +397,7 @@ class AttentionBlock(nn.Module):
             self.num_heads = num_heads
         else:
             assert (
-                channels % num_head_channels == 0
+                    channels % num_head_channels == 0
             ), f"q,k,v channels {channels} is not divisible by num_head_channels {num_head_channels}"
             self.num_heads = channels // num_head_channels
         self.use_checkpoint = use_checkpoint
@@ -438,7 +413,7 @@ class AttentionBlock(nn.Module):
         self.proj_out = zero_module(conv_nd(1, channels, channels, 1))
 
     def forward(self, x):
-        return torch_checkpoint(self._forward, (x, ), self.use_checkpoint)
+        return torch_checkpoint(self._forward, (x,), self.use_checkpoint)
 
     def _forward(self, x):
         b, c, *spatial = x.shape
@@ -465,7 +440,7 @@ def count_flops_attn(model, _x, y):
     # We perform two matmuls with the same number of ops.
     # The first computes the weight matrix, the second computes
     # the combination of the value vectors.
-    matmul_ops = 2 * b * (num_spatial**2) * c
+    matmul_ops = 2 * b * (num_spatial ** 2) * c
     model.total_ops += th.DoubleTensor([matmul_ops])
 
 
@@ -473,6 +448,7 @@ class QKVAttentionLegacy(nn.Module):
     """
     A module which performs QKV attention. Matches legacy QKVAttention + input/ouput heads shaping
     """
+
     def __init__(self, n_heads):
         super().__init__()
         self.n_heads = n_heads
@@ -492,7 +468,7 @@ class QKVAttentionLegacy(nn.Module):
         scale = 1 / math.sqrt(math.sqrt(ch))
         weight = th.einsum(
             "bct,bcs->bts", q * scale,
-            k * scale)  # More stable with f16 than dividing afterwards
+                            k * scale)  # More stable with f16 than dividing afterwards
         weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
         a = th.einsum("bts,bcs->bct", weight, v)
         return a.reshape(bs, -1, length)
@@ -506,6 +482,7 @@ class QKVAttention(nn.Module):
     """
     A module which performs QKV attention and splits in a different order.
     """
+
     def __init__(self, n_heads):
         super().__init__()
         self.n_heads = n_heads
@@ -541,16 +518,17 @@ class AttentionPool2d(nn.Module):
     """
     Adapted from CLIP: https://github.com/openai/CLIP/blob/main/clip/model.py
     """
+
     def __init__(
-        self,
-        spacial_dim: int,
-        embed_dim: int,
-        num_heads_channels: int,
-        output_dim: int = None,
+            self,
+            spacial_dim: int,
+            embed_dim: int,
+            num_heads_channels: int,
+            output_dim: int = None,
     ):
         super().__init__()
         self.positional_embedding = nn.Parameter(
-            th.randn(embed_dim, spacial_dim**2 + 1) / embed_dim**0.5)
+            th.randn(embed_dim, spacial_dim ** 2 + 1) / embed_dim ** 0.5)
         self.qkv_proj = conv_nd(1, embed_dim, 3 * embed_dim, 1)
         self.c_proj = conv_nd(1, embed_dim, output_dim or embed_dim, 1)
         self.num_heads = embed_dim // num_heads_channels

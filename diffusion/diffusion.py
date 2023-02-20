@@ -73,6 +73,7 @@ class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
                           original diffusion process to retain.
     :param kwargs: the kwargs to create the base diffusion process.
     """
+
     def __init__(self, conf: SpacedDiffusionBeatGansConfig):
         self.conf = conf
         self.use_timesteps = set(conf.use_timesteps)
@@ -93,26 +94,21 @@ class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
         super().__init__(conf)
 
     def p_mean_variance(self, model: Model, *args, **kwargs):  # pylint: disable=signature-differs
-        return super().p_mean_variance(self._wrap_model(model), *args,
-                                       **kwargs)
+        return super().p_mean_variance(self._wrap_model(model), *args, **kwargs)
 
     def training_losses(self, model: Model, *args, **kwargs):  # pylint: disable=signature-differs
-        return super().training_losses(self._wrap_model(model), *args,
-                                       **kwargs)
+        return super().training_losses(self._wrap_model(model), *args, **kwargs)
 
     def condition_mean(self, cond_fn, *args, **kwargs):
-        return super().condition_mean(self._wrap_model(cond_fn), *args,
-                                      **kwargs)
+        return super().condition_mean(self._wrap_model(cond_fn), *args, **kwargs)
 
     def condition_score(self, cond_fn, *args, **kwargs):
-        return super().condition_score(self._wrap_model(cond_fn), *args,
-                                       **kwargs)
+        return super().condition_score(self._wrap_model(cond_fn), *args, **kwargs)
 
     def _wrap_model(self, model: Model):
         if isinstance(model, _WrappedModel):
             return model
-        return _WrappedModel(model, self.timestep_map, self.rescale_timesteps,
-                             self.original_num_steps)
+        return _WrappedModel(model, self.timestep_map, self.rescale_timesteps, self.original_num_steps)
 
     def _scale_timesteps(self, t):
         # Scaling is done by the wrapped model.
@@ -123,6 +119,7 @@ class _WrappedModel:
     """
     converting the supplied t's to the old t's scales.
     """
+
     def __init__(self, model, timestep_map, rescale_timesteps,
                  original_num_steps):
         self.model = model

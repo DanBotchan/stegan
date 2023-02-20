@@ -318,7 +318,7 @@ class TrainConfig(BaseConfig):
     def make_model_conf(self):
         if self.model_name == ModelName.steganography:
             self.model_conf = SteganConfig(
-                enc_in_channels=6,
+                enc_in_channels=self.enc_in_channels,
                 dec_in_channels=3,
                 enc_cond_vec_size=1024,
                 dec_cond_vec_size=512,
@@ -343,6 +343,8 @@ class TrainConfig(BaseConfig):
                 resnet_two_cond=self.net_beatgans_resnet_two_cond,
                 resnet_use_zero_module=self.net_beatgans_resnet_use_zero_module,
                 net_enc_pool=self.net_enc_pool,
+                stegan_type=self.stegan_type,
+                encoder_pretrain=self.encoder_pretrain
             )
         else:
             raise NotImplementedError(self.model_name)

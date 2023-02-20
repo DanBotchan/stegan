@@ -1,13 +1,11 @@
 import os
-import json
-
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import *
-from torch.utils.data.dataset import TensorDataset
 
 from lit_model import LitModel
 from config import TrainConfig
+
 
 def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
     print('conf:', conf.name)
@@ -36,33 +34,22 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
     tb_logger = pl_loggers.TensorBoardLogger(save_dir=conf.logdir, name=None, version='')
 
     # from pytorch_lightning.
-    strategy=None
+    strategy = None
     if len(gpus) == 1 and nodes == 1:
         accelerator = None
     elif len(gpus) > 1:
         accelerator = 'cuda'
-        strategy = 'ddp'
+        strategy = 'ddp_find_unused_parameters_false'
     else:
         accelerator = 'cpu'
 
-    trainer = pl.Trainer(
-        max_steps=conf.total_samples // conf.batch_size_effective,
-        resume_from_checkpoint=resume,
-        gpus=gpus,
-        num_nodes=nodes,
-        accelerator=accelerator,
-        precision=16 if conf.fp16 else 32,
-        callbacks=[
-            checkpoint,
-            LearningRateMonitor(),
-        ],
-        # clip in the model instead
-        # gradient_clip_val=conf.grad_clip,
-        replace_sampler_ddp=True,
-        logger=tb_logger,
-        accumulate_grad_batches=conf.accum_batches,
-        strategy=strategy,
-    )
+    trainer = pl.Trainer(max_steps=conf.total_samples // conf.batch_size_effective, resume_from_checkpoint=resume,
+                         gpus=gpus, num_nodes=nodes, accelerator=accelerator, precision=16 if conf.fp16 else 32,
+                         callbacks=[checkpoint, LearningRateMonitor()],
+                         # clip in the model instead
+                         # gradient_clip_val=conf.grad_clip,
+                         replace_sampler_ddp=True,
+                         logger=tb_logger, accumulate_grad_batches=conf.accum_batches, strategy=strategy)
 
     if mode == 'train':
         trainer.fit(model)

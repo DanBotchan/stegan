@@ -4,13 +4,17 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from model.unet_autoenc import BeatGANsAutoencConfig
+from model.unet_autoenc import BeatGANsAutoencConfig, BeatGANsEncoderConfig
 from renderer import render_condition
 from utils import BaseReturn, show_tensor_image
 from config_base import BaseConfig
+from choices import SteganType
+
 
 @dataclass
 class SteganConfig(BaseConfig):
+    encoder_pretrain: str = None
+    stegan_type: SteganType = SteganType.images
     image_size: int = 128
     in_channels: int = 3
     enc_in_channels: int = 6
@@ -37,7 +41,7 @@ class SteganConfig(BaseConfig):
     # attentions generally improve performance
     # default: [16]
     # beatgans: [32, 16, 8]
-    attention_resolutions: Tuple[int] = (16, )
+    attention_resolutions: Tuple[int] = (16,)
     # number of time embed channels
     time_embed_channels: int = None
     # dropout applies to the resblocks (on feature maps)
@@ -72,7 +76,8 @@ class SteganConfig(BaseConfig):
     net_enc_num_res_blocks: int = 2
     net_enc_channel_mult: Tuple[int] = None
     net_enc_grad_checkpoint: bool = False
-    net_enc_attn_resolutions: Tuple[int]=None
+    net_enc_attn_resolutions: Tuple[int] = None
+    net_enc_out: int = 512
 
     def add_base(self):
         super().inherit(self)
@@ -81,12 +86,36 @@ class SteganConfig(BaseConfig):
         self.add_base()
         return BaseModel(self)
 
+
 class BaseModel(nn.Module):
     def __init__(self, conf, stop_pretrain_loading=False):
         super().__init__()
         self.conf = conf
+        self.stegan_type = self.conf.stegan_type
+
+        if self.stegan_type == SteganType.images:
+            self._setup_images_stegan_model(self.conf)
+        elif self.stegan_type == SteganType.semantics:
+            self._setup_semantics_stegan_model(self.conf)
+
+    def _setup_images_stegan_model(self, conf):
         self.encoder = self._setup_encoder_by_conf(conf)
         self.decoder = self._setup_decoder_by_conf(conf)
+
+    def _setup_semantics_stegan_model(self, conf):
+        self.encoder = self._setup_encoder_by_conf(conf)
+        self.decoder = self._setup_semantic_decoder_by_conf(conf)
+        if conf.encoder_pretrain:
+            print(f'loading pretrain ... {conf.encoder_pretrain}')
+            state = torch.load(conf.encoder_pretrain, map_location='cpu')
+            new_state_dict = {}
+            for k, v in state['state_dict'].items():
+                if k == 'x_T':
+                    pass
+                else:
+                    new_state_dict[k.replace('model.','')] = v
+            print('step:', state['global_step'])
+            self.encoder.load_state_dict(new_state_dict, strict=False)
 
     def _setup_encoder_by_conf(self, conf):
         model = BeatGANsAutoencConfig(
@@ -96,7 +125,7 @@ class BaseModel(nn.Module):
             dims=2,
             dropout=conf.dropout,
             embed_channels=conf.embed_channels,
-            enc_out_channels=1024,  # conf.style_ch,
+            enc_out_channels=conf.net_enc_out,
             enc_pool=conf.net_enc_pool,
             enc_num_res_block=conf.net_enc_num_res_blocks,
             enc_channel_mult=conf.net_enc_channel_mult,
@@ -131,7 +160,7 @@ class BaseModel(nn.Module):
             dims=2,
             dropout=conf.dropout,
             embed_channels=conf.embed_channels,
-            enc_out_channels=512,  # conf.style_ch,
+            enc_out_channels=conf.net_enc_out,
             enc_pool=conf.net_enc_pool,
             enc_num_res_block=conf.net_enc_num_res_blocks,
             enc_channel_mult=conf.net_enc_channel_mult,
@@ -157,11 +186,26 @@ class BaseModel(nn.Module):
         ).make_model()
         return model
 
+    def _setup_semantic_decoder_by_conf(self, conf):
+        model = BeatGANsEncoderConfig(image_size=conf.image_size, in_channels=conf.dec_in_channels,
+                                      model_channels=conf.model_channels, out_hid_channels=conf.net_enc_out,
+                                      out_channels=conf.net_enc_out, num_res_blocks=conf.num_res_blocks,
+                                      attention_resolutions=(conf.net_enc_attn_resolutions or conf.attention_resolutions),
+                                      dropout=conf.dropout,
+                                      channel_mult=conf.net_enc_channel_mult or conf.channel_mult,
+                                      use_time_condition=False, conv_resample=conf.conv_resample, dims=conf.dims,
+                                      use_checkpoint=conf.use_checkpoint or conf.net_enc_grad_checkpoint,
+                                      num_heads=conf.num_heads, num_head_channels=conf.num_head_channels,
+                                      resblock_updown=conf.resblock_updown,
+                                      use_new_attention_order=conf.use_new_attention_order,
+                                      pool=conf.net_enc_pool).make_model()
+        return model
+
     def forward(self, cover, hide, c_noise, sampler=None):
         assert (sampler), 'Need to define a sampelr'
-        cover = cover.unsqueeze(0)
-        hide = hide.unsqueeze(0)
-        c_noise = c_noise.unsqueeze(0)
+        cover = cover.unsqueeze(0) if len(cover.shape) < 4 else cover
+        hide = hide.unsqueeze(0) if len(hide.shape) < 4 else hide
+        c_noise = c_noise.unsqueeze(0) if len(c_noise.shape) < 4 else c_noise
 
         with torch.no_grad():
             # Use concat to combine the inputs, and detach because we don't want to train the encoders
@@ -173,4 +217,3 @@ class BaseModel(nn.Module):
             decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond)
 
         return BaseReturn(encoded=encoded, decoded=decoded)
-
