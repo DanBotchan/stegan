@@ -170,6 +170,7 @@ class GaussianDiffusionBeatGans:
             if self.conf.model_type.has_autoenc():
                 model_kwargs['x_start'] = x_start
                 model_kwargs['cond'] = cond
+                model_kwargs['h_cond'] = cond
 
         if self.conf.gen_type == GenerativeType.ddpm:
             return self.p_sample_loop(model, shape=shape, noise=noise, clip_denoised=clip_denoised,
@@ -237,13 +238,7 @@ class GaussianDiffusionBeatGans:
                 posterior_log_variance_clipped.shape[0] == x_start.shape[0])
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self,
-                        model: Model,
-                        x,
-                        t,
-                        clip_denoised=True,
-                        denoised_fn=None,
-                        model_kwargs=None):
+    def p_mean_variance(self, model: Model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None):
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
         the initial x, x_0.
@@ -270,30 +265,21 @@ class GaussianDiffusionBeatGans:
         B, C = x.shape[:2]
         assert t.shape == (B,)
         with autocast(self.conf.fp16):
-            model_forward = model.forward(x=x,
-                                          t=self._scale_timesteps(t),
-                                          **model_kwargs)
+            model_forward = model.forward(x=x, t=self._scale_timesteps(t), **model_kwargs)
         model_output = model_forward.pred
 
-        if self.model_var_type in [
-            ModelVarType.fixed_large, ModelVarType.fixed_small
-        ]:
+        if self.model_var_type in [ModelVarType.fixed_large, ModelVarType.fixed_small]:
             model_variance, model_log_variance = {
                 # for fixedlarge, we set the initial (log-)variance like so
                 # to get a better decoder log likelihood.
                 ModelVarType.fixed_large: (
                     np.append(self.posterior_variance[1], self.betas[1:]),
-                    np.log(
-                        np.append(self.posterior_variance[1], self.betas[1:])),
+                    np.log(np.append(self.posterior_variance[1], self.betas[1:])),
                 ),
-                ModelVarType.fixed_small: (
-                    self.posterior_variance,
-                    self.posterior_log_variance_clipped,
-                ),
+                ModelVarType.fixed_small: (self.posterior_variance, self.posterior_log_variance_clipped),
             }[self.model_var_type]
             model_variance = _extract_into_tensor(model_variance, t, x.shape)
-            model_log_variance = _extract_into_tensor(model_log_variance, t,
-                                                      x.shape)
+            model_log_variance = _extract_into_tensor(model_log_variance, t, x.shape)
 
         def process_xstart(x):
             if denoised_fn is not None:
@@ -302,36 +288,24 @@ class GaussianDiffusionBeatGans:
                 return x.clamp(-1, 1)
             return x
 
-        if self.model_mean_type in [
-            ModelMeanType.eps,
-        ]:
+        if self.model_mean_type in [ModelMeanType.eps]:
             if self.model_mean_type == ModelMeanType.eps:
                 pred_xstart = process_xstart(
-                    self._predict_xstart_from_eps(x_t=x, t=t,
-                                                  eps=model_output))
+                    self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output))
             else:
                 raise NotImplementedError()
-            model_mean, _, _ = self.q_posterior_mean_variance(
-                x_start=pred_xstart, x_t=x, t=t)
+            model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
         else:
             raise NotImplementedError(self.model_mean_type)
 
-        assert (model_mean.shape == model_log_variance.shape ==
-                pred_xstart.shape == x.shape)
-        return {
-            "mean": model_mean,
-            "variance": model_variance,
-            "log_variance": model_log_variance,
-            "pred_xstart": pred_xstart,
-            'model_forward': model_forward,
-        }
+        assert (model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape)
+        return {"mean": model_mean, "variance": model_variance, "log_variance": model_log_variance,
+                "pred_xstart": pred_xstart, 'model_forward': model_forward}
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
         assert x_t.shape == eps.shape
-        return (_extract_into_tensor(self.sqrt_recip_alphas_cumprod, t,
-                                     x_t.shape) * x_t -
-                _extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t,
-                                     x_t.shape) * eps)
+        return (_extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
+                _extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps)
 
     def _predict_xstart_from_xprev(self, x_t, t, xprev):
         assert x_t.shape == xprev.shape
@@ -567,46 +541,28 @@ class GaussianDiffusionBeatGans:
         alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
         sigma = (eta * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar)) * th.sqrt(1 - alpha_bar / alpha_bar_prev))
         # Equation 12.
-        noise = model_kwargs['o_noise']  # th.randn_like(x)
+        noise = th.randn_like(x)
         mean_pred = (out["pred_xstart"] * th.sqrt(alpha_bar_prev) + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps)
         nonzero_mask = ((t != 0).float().view(-1, *([1] * (len(x.shape) - 1))))  # no noise when t == 0
         sample = mean_pred + nonzero_mask * sigma * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
-    def ddim_reverse_sample(
-            self,
-            model: Model,
-            x,
-            t,
-            clip_denoised=True,
-            denoised_fn=None,
-            model_kwargs=None,
-            eta=0.0,
-    ):
+    def ddim_reverse_sample(self, model: Model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None, eta=0.0):
         """
         Sample x_{t+1} from the model using DDIM reverse ODE.
         NOTE: never used ?
         """
         assert eta == 0.0, "Reverse ODE only for deterministic path"
-        out = self.p_mean_variance(
-            model,
-            x,
-            t,
-            clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn,
-            model_kwargs=model_kwargs,
-        )
+        out = self.p_mean_variance(model, x, t, clip_denoised=clip_denoised, denoised_fn=denoised_fn,
+                                   model_kwargs=model_kwargs)
         # Usually our model outputs epsilon, but we re-derive it
         # in case we used x_start or x_prev prediction.
-        eps = (_extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x.shape)
-               * x - out["pred_xstart"]) / _extract_into_tensor(
-            self.sqrt_recipm1_alphas_cumprod, t, x.shape)
-        alpha_bar_next = _extract_into_tensor(self.alphas_cumprod_next, t,
-                                              x.shape)
+        eps = (_extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x.shape) * x - out[
+            "pred_xstart"]) / _extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x.shape)
+        alpha_bar_next = _extract_into_tensor(self.alphas_cumprod_next, t, x.shape)
 
         # Equation 12. reversed  (DDIM paper)  (th.sqrt == torch.sqrt)
-        mean_pred = (out["pred_xstart"] * th.sqrt(alpha_bar_next) +
-                     th.sqrt(1 - alpha_bar_next) * eps)
+        mean_pred = (out["pred_xstart"] * th.sqrt(alpha_bar_next) + th.sqrt(1 - alpha_bar_next) * eps)
 
         return {"sample": mean_pred, "pred_xstart": out["pred_xstart"]}
 

@@ -66,6 +66,7 @@ class SteganConfig(BaseConfig):
     # never tried
     use_new_attention_order: bool = False
     resnet_two_cond: bool = False
+    resnet_three_cond: bool = False
     resnet_cond_channels: int = None
     # init the decoding conv layers with zero weights, this speeds up training
     # default: True (BeattGANs)
@@ -113,9 +114,13 @@ class BaseModel(nn.Module):
                 if k == 'x_T':
                     pass
                 else:
-                    new_state_dict[k.replace('model.','')] = v
+                    new_state_dict[k.replace('model.', '')] = v
             print('step:', state['global_step'])
             self.encoder.load_state_dict(new_state_dict, strict=False)
+            for n, p in self.encoder.named_parameters():
+                if n.startswith('encoder'):
+                    p.requires_grad = False
+            print('Freezed the Encoder, encoder')
 
     def _setup_encoder_by_conf(self, conf):
         model = BeatGANsAutoencConfig(
@@ -146,6 +151,7 @@ class BaseModel(nn.Module):
             use_checkpoint=conf.use_checkpoint,
             use_new_attention_order=False,
             resnet_two_cond=conf.resnet_two_cond,
+            resnet_three_cond=conf.resnet_three_cond,
             resnet_use_zero_module=conf.resnet_use_zero_module,
             latent_net_conf=None,
             resnet_cond_channels=conf.enc_cond_vec_size,
@@ -190,7 +196,8 @@ class BaseModel(nn.Module):
         model = BeatGANsEncoderConfig(image_size=conf.image_size, in_channels=conf.dec_in_channels,
                                       model_channels=conf.model_channels, out_hid_channels=conf.net_enc_out,
                                       out_channels=conf.net_enc_out, num_res_blocks=conf.num_res_blocks,
-                                      attention_resolutions=(conf.net_enc_attn_resolutions or conf.attention_resolutions),
+                                      attention_resolutions=(
+                                                  conf.net_enc_attn_resolutions or conf.attention_resolutions),
                                       dropout=conf.dropout,
                                       channel_mult=conf.net_enc_channel_mult or conf.channel_mult,
                                       use_time_condition=False, conv_resample=conf.conv_resample, dims=conf.dims,
@@ -209,11 +216,22 @@ class BaseModel(nn.Module):
 
         with torch.no_grad():
             # Use concat to combine the inputs, and detach because we don't want to train the encoders
-            x_concat_sem = torch.concat((cover, hide), dim=1)
-            encode_cond = self.encoder.encode(x_concat_sem)['cond']
-            encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond)
+            if self.stegan_type == SteganType.images:
+                x_concat_sem = torch.concat((cover, hide), dim=1)
+                encode_cond = self.encoder.encode(x_concat_sem)['cond']
+                encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=None)
+                decode_cond = self.decoder.encode(encoded)['cond']
+                decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond, h_cond=None)
+            elif self.stegan_type == SteganType.semantics:
+                encode_cond = self.encoder.encode(cover)['cond']
+                h_cond = self.encoder.encode(hide)['cond']
+                encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=h_cond)
+                decode_cond = self.decoder(encoded)
+                decoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=decode_cond, h_cond=None)
+            else:
+                raise Exception('Not implemented')
 
-            decode_cond = self.decoder.encode(encoded)['cond']
-            decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond)
+
+
 
         return BaseReturn(encoded=encoded, decoded=decoded)

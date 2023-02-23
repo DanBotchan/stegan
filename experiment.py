@@ -49,7 +49,8 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
                          # clip in the model instead
                          # gradient_clip_val=conf.grad_clip,
                          replace_sampler_ddp=True,
-                         logger=tb_logger, accumulate_grad_batches=conf.accum_batches, strategy=strategy)
+                         logger=tb_logger, accumulate_grad_batches=conf.accum_batches, strategy=strategy,
+                         num_sanity_val_steps=0)
 
     if mode == 'train':
         trainer.fit(model)

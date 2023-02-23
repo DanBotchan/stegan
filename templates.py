@@ -13,7 +13,7 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     conf.encoder_pretrain = 'checkpoints/ffhq128_autoenc_130M/last.ckpt'
 
     conf.num_workers = 24 if not debug else 0
-    conf.batch_size = 10 if not debug else 1
+    conf.batch_size = 12 if not debug else 1
 
     conf.name = 'experiment_date'
     conf.model_name = ModelName.steganography
@@ -37,6 +37,7 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     conf.net_beatgans_attn_head = 1
     conf.net_beatgans_embed_channels = 512
     conf.net_beatgans_resnet_two_cond = True
+    conf.net_beatgans_resnet_three_cond = True
     conf.net_enc_pool = 'adaptivenonzero'
 
     conf.img_size = 128

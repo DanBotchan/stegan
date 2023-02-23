@@ -320,7 +320,7 @@ class TrainConfig(BaseConfig):
             self.model_conf = SteganConfig(
                 enc_in_channels=self.enc_in_channels,
                 dec_in_channels=3,
-                enc_cond_vec_size=1024,
+                enc_cond_vec_size=self.net_enc_out,
                 dec_cond_vec_size=512,
                 attention_resolutions=self.net_attn,
                 channel_mult=self.net_ch_mult,
@@ -341,6 +341,7 @@ class TrainConfig(BaseConfig):
                 use_checkpoint=self.net_beatgans_gradient_checkpoint,
                 use_new_attention_order=False,
                 resnet_two_cond=self.net_beatgans_resnet_two_cond,
+                resnet_three_cond=self.net_beatgans_resnet_three_cond,
                 resnet_use_zero_module=self.net_beatgans_resnet_use_zero_module,
                 net_enc_pool=self.net_enc_pool,
                 stegan_type=self.stegan_type,

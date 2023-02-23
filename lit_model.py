@@ -4,6 +4,7 @@ import re
 
 import numpy as np
 import pytorch_lightning as pl
+import torch.nn
 from torch.optim.optimizer import Optimizer
 from torch.autograd import grad
 from torch.cuda import amp
@@ -12,7 +13,7 @@ from torchvision.utils import make_grid, save_image
 from lmdb_writer import *
 from config import TrainConfig, TrainMode
 from dist_utils import get_world_size
-from choices import OptimizerType
+from choices import OptimizerType, SteganType
 from utils import WarmupLR, show_tensor_image, is_time
 from metrics import evaluate_fid, evaluate_lpips
 
@@ -47,7 +48,8 @@ class LitModel(pl.LightningModule):
         self.conds_mean = None
         self.conds_std = None
 
-        if conf.encoder_pretrain is not None:
+        self.mse_loss = torch.nn.MSELoss()
+        if conf.pretrain is not None:
             print(f'loading pretrain ... {conf.pretrain.name}')
             state = torch.load(conf.pretrain.path, map_location='cpu')
             print('step:', state['global_step'])
@@ -175,30 +177,50 @@ class LitModel(pl.LightningModule):
                 self.log_sample(cover=cover, hide=hide, noise=noise, mode='log_on_start')
                 self.conf.sample_on_train_start = False
 
-            x_start_conatcat = torch.concat((cover, hide), dim=1).detach()
+            if self.stegan_type == SteganType.images:
+                semantic = False
+                x_start_concat = torch.concat((cover, hide), dim=1).detach()
+                cond = None
+                h_cond = None
+                decoder_net = self.model.decoder
+            elif self.stegan_type == SteganType.semantics:
+                semantic = True
+                x_start_concat = torch.randn_like(cover)  # doesn't matter because it ignored if cond are not None
+                decoder_net = self.model.encoder
+                with torch.no_grad():
+                    cond = self.model.encoder.encode(cover)['cond']
+                    h_cond = self.model.encoder.encode(cover)['cond']
+
             # with numpy seed we have the problem that the sample t's are related!
             t, weight = self.T_sampler.sample(batch_size, device)
-            encoder_losses = self.sampler.training_losses(model=self.model.encoder, x_start=x_start_conatcat, t=t,
-                                                          noise=noise, model_kwargs={'cover': cover})
+            encoder_losses = self.sampler.training_losses(model=self.model.encoder, x_start=x_start_concat, t=t,
+                                                          noise=noise,
+                                                          model_kwargs={'cover': cover, 'cond': cond, 'h_cond': h_cond})
+
             encoded_pred_xstart = encoder_losses['pred_xstart']
-
+            de_cond = self.model.decoder(encoded_pred_xstart) if semantic else None
             t, weight = self.T_sampler.sample(batch_size, device)
-            decoder_losses = self.sampler.training_losses(model=self.model.decoder, x_start=encoded_pred_xstart, t=t,
-                                                          noise=noise, model_kwargs={'hide': hide})
+            decoder_losses = self.sampler.training_losses(model=decoder_net, x_start=encoded_pred_xstart, t=t,
+                                                          noise=noise, model_kwargs={'hide': hide, 'cond': de_cond})
 
-            loss = encoder_losses['loss'].mean() + decoder_losses['loss'].mean()
-
+            loss = self.conf.enc_loss_scale * encoder_losses['loss'].mean() + decoder_losses['loss'].mean()
+            if semantic:
+                MSE = self.mse_loss(de_cond, h_cond)
+                loss += MSE
             # divide by accum batches to make the accumulated gradient exact!
             for key in ['loss', 'vae']:
                 if key in encoder_losses and key in decoder_losses:
                     encoder_losses[key] = self.all_gather(encoder_losses[key]).mean()
                     decoder_losses[key] = self.all_gather(decoder_losses[key]).mean()
+                    if semantic:
+                        MSE = self.all_gather(MSE).mean()
 
             if self.global_rank == 0:
                 self.logger.experiment.add_scalar('Total Loss', loss, self.num_samples)
                 self.logger.experiment.add_scalar('Encoder Loss', encoder_losses['loss'], self.num_samples)
                 self.logger.experiment.add_scalar('Decoder Loss', decoder_losses['loss'], self.num_samples)
-
+                if semantic:
+                    self.logger.experiment.add_scalar('Vector MSE Loss', MSE, self.num_samples)
             self.log('train_loss', loss, on_epoch=True)
         return {'loss': loss}
 

@@ -62,6 +62,8 @@ class ResBlockConfig(BaseConfig):
     down: bool = False
     # whether to condition with both time & encoder's output
     two_cond: bool = False
+    three_cond: bool = False
+
     # number of encoders' output channels
     cond_emb_channels: int = None
     # suggest: False
@@ -128,6 +130,10 @@ class ResBlock(TimestepBlock):
             if conf.two_cond:
                 self.cond_emb_layers = nn.Sequential(nn.SiLU(), linear(conf.cond_emb_channels, conf.out_channels))
             #############################
+
+            if conf.three_cond:
+                self.cond_h_emb_layers = nn.Sequential(nn.SiLU(), linear(conf.cond_emb_channels, conf.out_channels))
+
             # OUT LAYERS (ignored when there is no condition)
             #############################
             # original version
@@ -214,7 +220,7 @@ class ResBlock(TimestepBlock):
                 if h_cond is None:
                     h_cond_out = None
                 else:
-                    h_cond_out = self.cond_emb_layers(h_cond).type(h.dtype)
+                    h_cond_out = self.cond_h_emb_layers(h_cond).type(h.dtype)
 
                 if cond_out is not None:
                     while len(cond_out.shape) < len(h.shape):
@@ -238,7 +244,7 @@ def apply_conditions(h, emb=None, cond=None, cond_three=None, layers: nn.Sequent
         cond: encoder's conditional (read to scale + shift)
     """
     three_cond = emb is not None and cond is not None and cond_three is not None
-    two_cond = emb is not None and cond is not None and not cond_three
+    two_cond = (emb is not None and cond is not None) and not three_cond
 
     if emb is not None:
         # adjusting shapes
@@ -253,9 +259,10 @@ def apply_conditions(h, emb=None, cond=None, cond_three=None, layers: nn.Sequent
         scale_shifts = [emb, cond]
     elif three_cond:
         # adjusting shapes
+        while len(cond_three.shape) < len(h.shape):
+            cond_three = cond_three[..., None]
         while len(cond.shape) < len(h.shape):
             cond = cond[..., None]
-            cond_three = cond_three[..., None]
         # time first
         scale_shifts = [emb, cond, cond_three]
     else:

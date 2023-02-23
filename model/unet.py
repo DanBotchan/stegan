@@ -63,6 +63,7 @@ class BeatGANsUNetConfig(BaseConfig):
     # never tried
     use_new_attention_order: bool = False
     resnet_two_cond: bool = False
+    resnet_three_cond: bool = False
     resnet_cond_channels: int = None
     # init the decoding conv layers with zero weights, this speeds up training
     # default: True (BeattGANs)
@@ -101,7 +102,7 @@ class BeatGANsUNetModel(nn.Module):
                 conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))
         ])
 
-        kwargs = dict(use_condition=True, two_cond=conf.resnet_two_cond, use_zero_module=conf.resnet_use_zero_module,
+        kwargs = dict(use_condition=True, two_cond=conf.resnet_two_cond, three_cond=conf.resnet_three_cond, use_zero_module=conf.resnet_use_zero_module,
                       # style channels for the resnet block
                       cond_emb_channels=conf.resnet_cond_channels)
 
