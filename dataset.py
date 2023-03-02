@@ -6,24 +6,24 @@ import lmdb
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-from torchvision.datasets import CIFAR10, LSUNClass
 import torch
 import pandas as pd
+import numpy as np
 
 import torchvision.transforms.functional as Ftrans
 
 
 class ImageDataset(Dataset):
     def __init__(
-        self,
-        folder,
-        image_size,
-        exts=['jpg'],
-        do_augment: bool = True,
-        do_transform: bool = True,
-        do_normalize: bool = True,
-        sort_names=False,
-        has_subdir: bool = True,
+            self,
+            folder,
+            image_size,
+            exts=['jpg'],
+            do_augment: bool = True,
+            do_transform: bool = True,
+            do_normalize: bool = True,
+            sort_names=False,
+            has_subdir: bool = True,
     ):
         super().__init__()
         self.folder = folder
@@ -118,9 +118,9 @@ class BaseLMDB(Dataset):
 
 
 def make_transform(
-    image_size,
-    flip_prob=0.5,
-    crop_d2c=False,
+        image_size,
+        flip_prob=0.5,
+        crop_d2c=False,
 ):
     if crop_d2c:
         transform = [
@@ -190,8 +190,7 @@ class FFHQlmdb(Dataset):
         return {'img': img, 'index': index}
 
 
-
-class StegFFHQlmdb(Dataset):
+class StegFFHQlmdbPair(Dataset):
     def __init__(self,
                  path=os.path.expanduser('/mnt/raid/home/dan_botchan/projects/stegan/datasets/ffhq128.lmdb'),
                  noise_path='/mnt/raid/home/dan_botchan/projects/stegan/datasets/noises',
@@ -240,6 +239,7 @@ class StegFFHQlmdb(Dataset):
                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
         self.noise_transform = transforms.Compose(noise_transform)
+
     def __len__(self):
         return self.length
 
@@ -259,7 +259,57 @@ class StegFFHQlmdb(Dataset):
                 noise = self.noise_transform(noise)
         else:
             noise = torch.randn_like(cover)
-        return {'hide': hide, 'cover': cover, 'noise': noise,  'index': cover_index, 'hide_index': hide_index}
+        return {'hide': hide, 'cover': cover, 'noise': noise, 'index': cover_index, 'hide_index': hide_index}
+
+
+class StegFFHQlmdb(Dataset):
+    def __init__(self, path=os.path.expanduser('/mnt/raid/home/dan_botchan/projects/stegan/datasets/ffhq128.lmdb'),
+                 image_size=256, original_resolution=256, split=None, as_tensor: bool = True, do_augment: bool = True,
+                 do_normalize: bool = True, **kwargs):
+
+        self.original_resolution = original_resolution
+        self.data = BaseLMDB(path, original_resolution, zfill=5)
+        self.length = len(self.data)
+
+        if split is None:
+            self.offset = 0
+        elif split == 'train':
+            # last 60k
+            self.length = self.length - 200
+            self.offset = 200
+        elif split == 'val':
+            # first 10k
+            self.length = 200
+            self.offset = 0
+        else:
+            raise NotImplementedError()
+
+        transform = [transforms.Resize(image_size)]
+        noise_transform = [transforms.Resize(image_size)]
+        if do_augment:
+            transform.append(transforms.RandomHorizontalFlip())
+        if as_tensor:
+            transform.append(transforms.ToTensor())
+        if do_normalize:
+            transform.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+        self.transform = transforms.Compose(transform)
+        self.noise_transform = transforms.Compose(noise_transform)
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, index):
+        cover_index = index + self.offset
+        hide_index = np.random.randint(self.offset, self.length, 1).item()
+        while cover_index == hide_index:
+            hide_index = np.random.randint(self.offset, self.length, 1).item()
+        hide = self.data[hide_index]
+        cover = self.data[cover_index]
+        if self.transform is not None:
+            hide = self.transform(hide)
+            cover = self.transform(cover)
+        noise = None
+        return {'hide': hide, 'cover': cover, 'noise': noise, 'index': cover_index, 'hide_index': hide_index}
 
 
 class Crop:
@@ -293,6 +343,7 @@ class CelebAlmdb(Dataset):
     """
     also supports for d2c crop.
     """
+
     def __init__(self,
                  path,
                  image_size,
@@ -419,7 +470,6 @@ class Bedroom_lmdb(Dataset):
 
 
 class CelebAttrDataset(Dataset):
-
     id_to_cls = [
         '5_o_Clock_Shadow', 'Arched_Eyebrows', 'Attractive', 'Bags_Under_Eyes',
         'Bald', 'Bangs', 'Big_Lips', 'Big_Nose', 'Black_Hair', 'Blond_Hair',
@@ -517,6 +567,7 @@ class CelebD2CAttrDataset(CelebAttrDataset):
     the dataset is used in the D2C paper. 
     it has a specific crop from the original CelebA.
     """
+
     def __init__(self,
                  folder,
                  image_size=64,
@@ -543,20 +594,20 @@ class CelebD2CAttrDataset(CelebAttrDataset):
 
 class CelebAttrFewshotDataset(Dataset):
     def __init__(
-        self,
-        cls_name,
-        K,
-        img_folder,
-        img_size=64,
-        ext='png',
-        seed=0,
-        only_cls_name: str = None,
-        only_cls_value: int = None,
-        all_neg: bool = False,
-        do_augment: bool = False,
-        do_transform: bool = True,
-        do_normalize: bool = True,
-        d2c: bool = False,
+            self,
+            cls_name,
+            K,
+            img_folder,
+            img_size=64,
+            ext='png',
+            seed=0,
+            only_cls_name: str = None,
+            only_cls_value: int = None,
+            all_neg: bool = False,
+            do_augment: bool = False,
+            do_transform: bool = True,
+            do_normalize: bool = True,
+            d2c: bool = False,
     ) -> None:
         self.cls_name = cls_name
         self.K = K

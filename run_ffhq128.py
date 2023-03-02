@@ -3,16 +3,16 @@ from experiment import train
 
 if __name__ == '__main__':
 
-    debug = False
+    debug = True
     if debug:
         gpus = [0]
     else:
-        gpus = [0]
+        gpus = [0, 1, 3]
     scale_up_gpus = len(gpus) if len(gpus) > 0 else 1
 
     conf = stegan_config(debug=debug, scale_up_gpus=scale_up_gpus)
-    conf.name = 'semantics_28_02_23'
-    conf.enc_loss_scale = 0.1
+    conf.name = 'semantics_02_03_23'
+    conf.enc_loss_scale = 0.5
     conf.sample_on_train_start = True
 
     train(conf, gpus=gpus)

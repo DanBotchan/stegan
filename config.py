@@ -12,7 +12,7 @@ from diffusion.diffusion import space_timesteps
 from config_base import BaseConfig
 from dataset import *
 from diffusion import *
-from diffusion.base import GenerativeType, LossType, ModelMeanType, ModelVarType, get_named_beta_schedule
+from diffusion.base import get_named_beta_schedule
 from base_models import SteganConfig
 from choices import *
 from dataset_util import *
@@ -22,6 +22,8 @@ data_paths = {
         os.path.expanduser('datasets/ffhq256.lmdb'),
 
     'ffhqlmdb128':
+        os.path.expanduser('datasets/ffhq128.lmdb'),
+    'ffhqlmdb128_steg_paired':
         os.path.expanduser('datasets/ffhq128.lmdb'),
     'ffhqlmdb128_steg':
         os.path.expanduser('datasets/ffhq128.lmdb'),
@@ -293,6 +295,11 @@ class TrainConfig(BaseConfig):
                               original_resolution=None,
                               crop_d2c=True,
                               **kwargs)
+        elif self.data_name == 'ffhqlmdb128_steg_paired':
+            # always use d2c crop
+            return StegFFHQlmdbPair(path=path or self.data_path,
+                                image_size=self.img_size,
+                                **kwargs)
         elif self.data_name == 'ffhqlmdb128_steg':
             # always use d2c crop
             return StegFFHQlmdb(path=path or self.data_path,
