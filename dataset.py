@@ -228,6 +228,9 @@ class StegFFHQlmdb(Dataset):
         transform = [
             transforms.Resize(image_size),
         ]
+        noise_transform = [
+            transforms.Resize(image_size),
+        ]
         if do_augment:
             transform.append(transforms.RandomHorizontalFlip())
         if as_tensor:
@@ -236,7 +239,7 @@ class StegFFHQlmdb(Dataset):
             transform.append(
                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
         self.transform = transforms.Compose(transform)
-
+        self.noise_transform = transforms.Compose(noise_transform)
     def __len__(self):
         return self.length
 
@@ -252,6 +255,8 @@ class StegFFHQlmdb(Dataset):
         noise_path = os.path.join(self.noise_path, f'noise_{index:05}.pt')
         if os.path.exists(noise_path):
             noise = torch.load(noise_path)
+            if self.noise_transform is not None:
+                noise = self.noise_transform(noise)
         else:
             noise = torch.randn_like(cover)
         return {'hide': hide, 'cover': cover, 'noise': noise,  'index': cover_index, 'hide_index': hide_index}

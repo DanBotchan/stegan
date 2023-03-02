@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from torchvision.utils import make_grid
 
 from model.unet_autoenc import BeatGANsAutoencConfig, BeatGANsEncoderConfig
 from renderer import render_condition
@@ -105,7 +106,9 @@ class BaseModel(nn.Module):
 
     def _setup_semantics_stegan_model(self, conf):
         self.encoder = self._setup_encoder_by_conf(conf)
-        self.decoder = self._setup_semantic_decoder_by_conf(conf)
+        self.decoder = self._setup_decoder_by_conf(conf)
+
+        #self.decoder = self._setup_semantic_decoder_by_conf(conf)
         if conf.encoder_pretrain:
             print(f'loading pretrain ... {conf.encoder_pretrain}')
             state = torch.load(conf.encoder_pretrain, map_location='cpu')
@@ -121,6 +124,17 @@ class BaseModel(nn.Module):
                 if n.startswith('encoder'):
                     p.requires_grad = False
             print('Freezed the Encoder, encoder')
+
+            new_state_dict = {}
+            for k, v in state['state_dict'].items():
+                if k == 'x_T':
+                    pass
+                else:
+                    if not k.startswith('encoder'):
+                        new_state_dict[k.replace('model.', '')] = v
+            print('step:', state['global_step'])
+            self.decoder.load_state_dict(new_state_dict, strict=False)
+
 
     def _setup_encoder_by_conf(self, conf):
         model = BeatGANsAutoencConfig(
@@ -186,6 +200,7 @@ class BaseModel(nn.Module):
             use_checkpoint=conf.use_checkpoint,
             use_new_attention_order=False,
             resnet_two_cond=conf.resnet_two_cond,
+            resnet_three_cond=False,
             resnet_use_zero_module=conf.resnet_use_zero_module,
             latent_net_conf=None,
             resnet_cond_channels=conf.dec_cond_vec_size,
@@ -223,11 +238,14 @@ class BaseModel(nn.Module):
                 decode_cond = self.decoder.encode(encoded)['cond']
                 decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond, h_cond=None)
             elif self.stegan_type == SteganType.semantics:
-                encode_cond = self.encoder.encode(cover)['cond']
-                h_cond = self.encoder.encode(hide)['cond']
+                encode_cond = self.encoder.encode(cover)['cond'].detach()
+                h_cond = self.encoder.encode(hide)['cond'].detach()
                 encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=h_cond)
-                decode_cond = self.decoder(encoded)
-                decoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=decode_cond, h_cond=None)
+                decode_cond = self.decoder.encode(encoded)['cond']
+                decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond, h_cond=None)
+                decode_cond2 = self.decoder.encode(cover)['cond']
+                decoded2 = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond2, h_cond=None)
+                None
             else:
                 raise Exception('Not implemented')
 

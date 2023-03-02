@@ -133,9 +133,7 @@ class _WrappedModel:
             t: t's with differrent ranges (can be << T due to smaller eval T) need to be converted to the original t's
             t_cond: the same as t but can be of different values
         """
-        map_tensor = th.tensor(self.timestep_map,
-                               device=t.device,
-                               dtype=t.dtype)
+        map_tensor = th.tensor(self.timestep_map, device=t.device, dtype=t.dtype)
 
         def do(t):
             new_ts = map_tensor[t]

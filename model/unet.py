@@ -93,8 +93,7 @@ class BeatGANsUNetModel(nn.Module):
         )
 
         if conf.num_classes is not None:
-            self.label_emb = nn.Embedding(conf.num_classes,
-                                          conf.embed_channels)
+            self.label_emb = nn.Embedding(conf.num_classes, conf.embed_channels)
 
         ch = input_ch = int(conf.channel_mult[0] * conf.model_channels)
         self.input_blocks = nn.ModuleList([
@@ -102,7 +101,8 @@ class BeatGANsUNetModel(nn.Module):
                 conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))
         ])
 
-        kwargs = dict(use_condition=True, two_cond=conf.resnet_two_cond, three_cond=conf.resnet_three_cond, use_zero_module=conf.resnet_use_zero_module,
+        kwargs = dict(use_condition=True, two_cond=conf.resnet_two_cond, three_cond=conf.resnet_three_cond,
+                      use_zero_module=conf.resnet_use_zero_module,
                       # style channels for the resnet block
                       cond_emb_channels=conf.resnet_cond_channels)
 
@@ -119,8 +119,7 @@ class BeatGANsUNetModel(nn.Module):
 
         ds = 1
         resolution = conf.image_size
-        for level, mult in enumerate(conf.input_channel_mult
-                                     or conf.channel_mult):
+        for level, mult in enumerate(conf.input_channel_mult or conf.channel_mult):
             for _ in range(conf.num_input_res_blocks or conf.num_res_blocks):
                 layers = [
                     ResBlockConfig(ch, conf.embed_channels, conf.dropout, out_channels=int(mult * conf.model_channels),
@@ -129,15 +128,10 @@ class BeatGANsUNetModel(nn.Module):
                 ch = int(mult * conf.model_channels)
                 if resolution in conf.attention_resolutions:
                     layers.append(
-                        AttentionBlock(
-                            ch,
-                            use_checkpoint=conf.use_checkpoint
-                                           or conf.attn_checkpoint,
-                            num_heads=conf.num_heads,
-                            num_head_channels=conf.num_head_channels,
-                            use_new_attention_order=conf.
-                                use_new_attention_order,
-                        ))
+                        AttentionBlock(ch, use_checkpoint=conf.use_checkpoint or conf.attn_checkpoint,
+                                       num_heads=conf.num_heads, num_head_channels=conf.num_head_channels,
+                                       use_new_attention_order=conf.use_new_attention_order)
+                    )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
                 # input_block_chans.append(ch)
@@ -189,17 +183,11 @@ class BeatGANsUNetModel(nn.Module):
                 layers = [
                     ResBlockConfig(
                         # only direct channels when gated
-                        channels=ch + ich,
-                        emb_channels=conf.embed_channels,
-                        dropout=conf.dropout,
-                        out_channels=int(conf.model_channels * mult),
-                        dims=conf.dims,
+                        channels=ch + ich, emb_channels=conf.embed_channels, dropout=conf.dropout,
+                        out_channels=int(conf.model_channels * mult), dims=conf.dims,
                         use_checkpoint=conf.use_checkpoint,
                         # lateral channels are described here when gated
-                        has_lateral=True if ich > 0 else False,
-                        lateral_channels=None,
-                        **kwargs,
-                    ).make_model()
+                        has_lateral=True if ich > 0 else False, lateral_channels=None, **kwargs).make_model()
                 ]
                 ch = int(conf.model_channels * mult)
                 if resolution in conf.attention_resolutions:
@@ -228,15 +216,11 @@ class BeatGANsUNetModel(nn.Module):
 
         if conf.resnet_use_zero_module:
             self.out = nn.Sequential(
-                normalization(ch),
-                nn.SiLU(),
-                zero_module(conv_nd(conf.dims, input_ch, conf.out_channels, 3, padding=1))
+                normalization(ch), nn.SiLU(), zero_module(conv_nd(conf.dims, input_ch, conf.out_channels, 3, padding=1))
             )
         else:
             self.out = nn.Sequential(
-                normalization(ch),
-                nn.SiLU(),
-                conv_nd(conf.dims, input_ch, conf.out_channels, 3, padding=1),
+                normalization(ch), nn.SiLU(), conv_nd(conf.dims, input_ch, conf.out_channels, 3, padding=1),
             )
 
     def forward(self, x, t, y=None, **kwargs):

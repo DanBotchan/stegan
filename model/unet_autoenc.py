@@ -147,11 +147,16 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
         else:
             raise NotImplementedError()
 
-        if self.conf.resnet_two_cond:
+        if self.conf.resnet_two_cond and not self.conf.resnet_three_cond:
             # two cond: first = time emb, second = cond_emb
             emb = res.time_emb
             cond_emb = res.emb
-            h_cond_emb = res.h_emb
+            h_cond_emb = None
+        elif self.conf.resnet_three_cond:
+            # two cond: first = time emb, second = cond_emb
+            emb = res.time_emb
+            cond_emb = res.emb
+            h_cond_emb  =res.h_emb
         else:
             # one cond = combined of both time and cond
             emb = res.emb
@@ -242,6 +247,7 @@ class TimeStyleSeperateEmbed(nn.Module):
         self.time_embed = nn.Sequential(linear(time_channels, time_out_channels), nn.SiLU(),
                                         linear(time_out_channels, time_out_channels))
         self.style = nn.Identity()
+        self.style2 = nn.Identity()
 
     def forward(self, time_emb=None, cond=None, h_cond=None, **kwargs):
         if time_emb is None:
@@ -250,5 +256,5 @@ class TimeStyleSeperateEmbed(nn.Module):
         else:
             time_emb = self.time_embed(time_emb)
         style = self.style(cond)
-        h_style = self.style(h_cond)
+        h_style = self.style2(h_cond)
         return EmbedReturn(emb=style, h_emb=h_style, time_emb=time_emb, style=style)

@@ -217,16 +217,24 @@ class ResBlock(TimestepBlock):
                 else:
                     cond_out = self.cond_emb_layers(cond).type(h.dtype)
 
-                if h_cond is None:
-                    h_cond_out = None
-                else:
-                    h_cond_out = self.cond_h_emb_layers(h_cond).type(h.dtype)
-
                 if cond_out is not None:
                     while len(cond_out.shape) < len(h.shape):
                         cond_out = cond_out[..., None]
+
+                if self.conf.three_cond:
+                    if h_cond is None:
+                        h_cond_out = None
+                    else:
+                        h_cond_out = self.cond_h_emb_layers(h_cond).type(h.dtype)
+
+                    if h_cond_out is not None:
+                        while len(h_cond_out.shape) < len(h.shape):
+                            h_cond_out = h_cond_out[..., None]
+                else:
+                    h_cond_out = None
             else:
                 cond_out = None
+                h_cond_out = None
 
             # this is the new refactored code
             h = apply_conditions(h=h, emb=emb_out, cond=cond_out, cond_three=h_cond_out, layers=self.out_layers,
@@ -257,6 +265,7 @@ def apply_conditions(h, emb=None, cond=None, cond_three=None, layers: nn.Sequent
             cond = cond[..., None]
         # time first
         scale_shifts = [emb, cond]
+
     elif three_cond:
         # adjusting shapes
         while len(cond_three.shape) < len(h.shape):

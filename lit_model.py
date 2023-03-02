@@ -168,7 +168,6 @@ class LitModel(pl.LightningModule):
         no optimization at this stage.
         """
         with amp.autocast(False):
-
             cover, hide, noise = batch['cover'], batch['hide'], batch['noise']
             batch_size = cover.shape[0]
             device = cover.device
@@ -182,14 +181,12 @@ class LitModel(pl.LightningModule):
                 x_start_concat = torch.concat((cover, hide), dim=1).detach()
                 cond = None
                 h_cond = None
-                decoder_net = self.model.decoder
+
             elif self.stegan_type == SteganType.semantics:
                 semantic = True
-                x_start_concat = torch.randn_like(cover)  # doesn't matter because it ignored if cond are not None
-                decoder_net = self.model.encoder
-                with torch.no_grad():
-                    cond = self.model.encoder.encode(cover)['cond']
-                    h_cond = self.model.encoder.encode(cover)['cond']
+                x_start_concat = torch.randn_like(cover).detach()  # doesn't matter because its ignored if cond are not None
+                cond = self.model.encoder.encode(cover)['cond'].detach()
+                h_cond = self.model.encoder.encode(hide)['cond'].detach()
 
             # with numpy seed we have the problem that the sample t's are related!
             t, weight = self.T_sampler.sample(batch_size, device)
@@ -198,30 +195,31 @@ class LitModel(pl.LightningModule):
                                                           model_kwargs={'cover': cover, 'cond': cond, 'h_cond': h_cond})
 
             encoded_pred_xstart = encoder_losses['pred_xstart']
-            de_cond = self.model.decoder(encoded_pred_xstart) if semantic else None
             t, weight = self.T_sampler.sample(batch_size, device)
-            decoder_losses = self.sampler.training_losses(model=decoder_net, x_start=encoded_pred_xstart, t=t,
-                                                          noise=noise, model_kwargs={'hide': hide, 'cond': de_cond})
+            decoder_losses = self.sampler.training_losses(model=self.model.decoder, x_start=encoded_pred_xstart, t=t,
+                                                          noise=noise, model_kwargs={'hide': hide})
 
             loss = self.conf.enc_loss_scale * encoder_losses['loss'].mean() + decoder_losses['loss'].mean()
             if semantic:
-                MSE = self.mse_loss(de_cond, h_cond)
-                loss += MSE
+                hidden_vector_loss = self.mse_loss(decoder_losses['cond'], h_cond).mean()
+                loss += hidden_vector_loss
+
             # divide by accum batches to make the accumulated gradient exact!
             for key in ['loss', 'vae']:
                 if key in encoder_losses and key in decoder_losses:
                     encoder_losses[key] = self.all_gather(encoder_losses[key]).mean()
                     decoder_losses[key] = self.all_gather(decoder_losses[key]).mean()
                     if semantic:
-                        MSE = self.all_gather(MSE).mean()
+                        hidden_vector_loss = self.all_gather(hidden_vector_loss).mean()
 
             if self.global_rank == 0:
                 self.logger.experiment.add_scalar('Total Loss', loss, self.num_samples)
                 self.logger.experiment.add_scalar('Encoder Loss', encoder_losses['loss'], self.num_samples)
                 self.logger.experiment.add_scalar('Decoder Loss', decoder_losses['loss'], self.num_samples)
                 if semantic:
-                    self.logger.experiment.add_scalar('Vector MSE Loss', MSE, self.num_samples)
+                    self.logger.experiment.add_scalar('Vector MSE Loss', hidden_vector_loss, self.num_samples)
             self.log('train_loss', loss, on_epoch=True)
+
         return {'loss': loss}
 
     def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
@@ -265,7 +263,9 @@ class LitModel(pl.LightningModule):
         is_time_to_sample = self.conf.sample_every_samples > 0 and is_time(self.num_samples,
                                                                            self.conf.sample_every_samples,
                                                                            self.conf.batch_size_effective)
-
+        cover = cover[:8]
+        hide = hide[:8]
+        noise = noise[:8]
         def do(model, postfix, save_real=False):
             model.eval()
             with torch.no_grad():
@@ -275,6 +275,7 @@ class LitModel(pl.LightningModule):
                         gen = self.model(cover=c, hide=h, c_noise=n, sampler=self.eval_sampler)
                     l_encoded.append(gen.encoded)
                     l_decoded.append(gen.decoded)
+
 
                 encoded_imgs = self.all_gather(torch.cat(l_encoded))
                 decoded_imgs = self.all_gather(torch.cat(l_decoded))
@@ -298,42 +299,39 @@ class LitModel(pl.LightningModule):
                         real_hide = real_hide.flatten(0, 1)
 
                     if self.global_rank == 0:
+                        encoded_grid = (make_grid(encoded_imgs) + 1) / 2
+                        decoded_grid = (make_grid(decoded_imgs) + 1) / 2
                         grid_real_cover = (make_grid(real_cover) + 1) / 2
                         grid_real_hide = (make_grid(real_hide) + 1) / 2
-                        self.logger.experiment.add_image(f'sample{postfix}/real_cover', grid_real_cover,
+
+                        self.logger.experiment.add_image(f'sample{postfix}/1. cover', grid_real_cover,
                                                          self.num_samples)
-                        self.logger.experiment.add_image(f'sample{postfix}/real_hide', grid_real_hide, self.num_samples)
+                        self.logger.experiment.add_image(f'sample{postfix}/2. encoded/', encoded_grid, self.num_samples)
+                        self.logger.experiment.add_image(f'sample{postfix}/3. hide', grid_real_hide, self.num_samples)
+                        self.logger.experiment.add_image(f'sample{postfix}/4. decoded/', decoded_grid, self.num_samples)
+
                         sample_dir_c = os.path.join(self.conf.logdir, f'sample{postfix}', 'cover')
                         sample_dir_h = os.path.join(self.conf.logdir, f'sample{postfix}', 'hide')
+                        sample_dir_e = os.path.join(self.conf.logdir, f'sample{postfix}', 'encoded')
+                        sample_dir_d = os.path.join(self.conf.logdir, f'sample{postfix}', 'decoded')
 
                         if not os.path.exists(sample_dir_c):
                             os.makedirs(sample_dir_c)
                         if not os.path.exists(sample_dir_h):
                             os.makedirs(sample_dir_h)
+                        if not os.path.exists(sample_dir_e):
+                            os.makedirs(sample_dir_e)
+                        if not os.path.exists(sample_dir_d):
+                            os.makedirs(sample_dir_d)
 
                         path_c = os.path.join(sample_dir_c, f'{self.num_samples:010}.png')
                         path_h = os.path.join(sample_dir_h, f'{self.num_samples:010}.png')
+                        path_e = os.path.join(sample_dir_e, f'{self.num_samples:010}.png')
+                        path_d = os.path.join(sample_dir_d, f'{self.num_samples:010}.png')
                         save_image(grid_real_cover, path_c)
                         save_image(grid_real_hide, path_h)
-
-                if self.global_rank == 0:
-                    # save samples to the tensorboard
-                    encoded_grid = (make_grid(encoded_imgs) + 1) / 2
-                    decoded_grid = (make_grid(decoded_imgs) + 1) / 2
-                    sample_dir_e = os.path.join(self.conf.logdir, f'sample{postfix}', 'encoded')
-                    sample_dir_d = os.path.join(self.conf.logdir, f'sample{postfix}', 'decoded')
-
-                    if not os.path.exists(sample_dir_e):
-                        os.makedirs(sample_dir_e)
-                    if not os.path.exists(sample_dir_d):
-                        os.makedirs(sample_dir_d)
-
-                    path_e = os.path.join(sample_dir_e, f'{self.num_samples:010}.png')
-                    path_d = os.path.join(sample_dir_d, f'{self.num_samples:010}.png')
-                    save_image(encoded_grid, path_e)
-                    save_image(decoded_grid, path_d)
-                    self.logger.experiment.add_image(f'sample{postfix}/encoded/', encoded_grid, self.num_samples)
-                    self.logger.experiment.add_image(f'sample{postfix}/decoded/', decoded_grid, self.num_samples)
+                        save_image(encoded_grid, path_e)
+                        save_image(decoded_grid, path_d)
 
             model.train()
 

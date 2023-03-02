@@ -130,9 +130,14 @@ class GaussianDiffusionBeatGans:
             model_output = model_forward.pred
             _model_output = model_output
 
+            #we are in decoder
+            if 'hide' in model_kwargs.keys():
+                terms['cond'] = model_forward.cond.float()
+
             # get the pred xstart
             p_mean_var = self.p_mean_variance(model=DummyModel(pred=_model_output), x=x_t, t=t, clip_denoised=False)
             terms['pred_xstart'] = p_mean_var['pred_xstart']
+
             target_types = {ModelMeanType.eps: noise}
             target = target_types[self.model_mean_type]
             assert model_output.shape == target.shape
@@ -159,7 +164,7 @@ class GaussianDiffusionBeatGans:
 
         return terms
 
-    def sample(self, model: Model, shape=None, noise=None, cond=None, x_start=None, clip_denoised=True,
+    def sample(self, model: Model, shape=None, noise=None, cond=None, h_cond=None, x_start=None, clip_denoised=True,
                model_kwargs=None, progress=False):
         """
         Args:
@@ -170,7 +175,7 @@ class GaussianDiffusionBeatGans:
             if self.conf.model_type.has_autoenc():
                 model_kwargs['x_start'] = x_start
                 model_kwargs['cond'] = cond
-                model_kwargs['h_cond'] = cond
+                model_kwargs['h_cond'] = h_cond
 
         if self.conf.gen_type == GenerativeType.ddpm:
             return self.p_sample_loop(model, shape=shape, noise=noise, clip_denoised=clip_denoised,
