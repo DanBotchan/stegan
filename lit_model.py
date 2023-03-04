@@ -70,12 +70,14 @@ class LitModel(pl.LightningModule):
         cond = self.ema_model.encoder.forward(x)
         return cond
 
-    def encode_stochastic(self, x, cond, T=None):
+    def encode_stochastic(self, x, cond, T=None, mode='encode'):
+        assert mode in ['encode', 'decode'], f'{mode} is not valid option'
         if T is None:
             sampler = self.eval_sampler
         else:
             sampler = self.conf._make_diffusion_conf(T).make_sampler()
-        out = sampler.ddim_reverse_sample_loop(self.ema_model, x, model_kwargs={'cond': cond})
+        model = self.model.encoder if mode=='encode' else self.model.decoder
+        out = sampler.ddim_reverse_sample_loop(model, x, model_kwargs={'cond': cond})
         return out['sample']
 
     def forward(self, x, hide=None, noise=None, mode='encode'):
