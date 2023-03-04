@@ -43,14 +43,14 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
     else:
         accelerator = 'cpu'
 
-    trainer = pl.Trainer(max_steps=conf.total_samples // conf.batch_size_effective +1, resume_from_checkpoint=resume,
+    trainer = pl.Trainer(max_steps=conf.total_samples // conf.batch_size_effective + 1, resume_from_checkpoint=resume,
                          gpus=gpus, num_nodes=nodes, accelerator=accelerator, precision=16 if conf.fp16 else 32,
                          callbacks=[checkpoint, LearningRateMonitor()],
                          # clip in the model instead
                          # gradient_clip_val=conf.grad_clip,
-                         replace_sampler_ddp=True,
+                         replace_sampler_ddp=True, num_sanity_val_steps=0,
                          logger=tb_logger, accumulate_grad_batches=conf.accum_batches, strategy=strategy,
-                         num_sanity_val_steps=0)
+                         )
 
     if mode == 'train':
         trainer.fit(model)

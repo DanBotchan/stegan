@@ -9,6 +9,7 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     conf = TrainConfig()
     conf.debug = debug
 
+    conf.model_type = ModelType.stegan
     conf.stegan_type = SteganType.semantics
     conf.encoder_pretrain = 'checkpoints/ffhq128_autoenc_130M/last.ckpt'
 

@@ -290,21 +290,14 @@ class TrainConfig(BaseConfig):
                               **kwargs)
         elif self.data_name == 'celebalmdb':
             # always use d2c crop
-            return CelebAlmdb(path=path or self.data_path,
-                              image_size=self.img_size,
-                              original_resolution=None,
-                              crop_d2c=True,
-                              **kwargs)
+            return CelebAlmdb(path=path or self.data_path, image_size=self.img_size, original_resolution=None,
+                              crop_d2c=True, **kwargs)
         elif self.data_name == 'ffhqlmdb128_steg_paired':
             # always use d2c crop
-            return StegFFHQlmdbPair(path=path or self.data_path,
-                                image_size=self.img_size,
-                                **kwargs)
+            return StegFFHQlmdbPair(path=path or self.data_path, image_size=self.img_size, **kwargs)
         elif self.data_name == 'ffhqlmdb128_steg':
             # always use d2c crop
-            return StegFFHQlmdb(path=path or self.data_path,
-                                image_size=self.img_size,
-                                **kwargs)
+            return StegFFHQlmdb(path=path or self.data_path, image_size=self.img_size, **kwargs)
         else:
             raise NotImplementedError()
 

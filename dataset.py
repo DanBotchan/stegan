@@ -308,7 +308,7 @@ class StegFFHQlmdb(Dataset):
         if self.transform is not None:
             hide = self.transform(hide)
             cover = self.transform(cover)
-        noise = None
+        noise = torch.randn_like(cover)
         return {'hide': hide, 'cover': cover, 'noise': noise, 'index': cover_index, 'hide_index': hide_index}
 
 

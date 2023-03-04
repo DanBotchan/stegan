@@ -78,11 +78,24 @@ class LitModel(pl.LightningModule):
         out = sampler.ddim_reverse_sample_loop(self.ema_model, x, model_kwargs={'cond': cond})
         return out['sample']
 
-    def forward(self, noise=None, x_start=None, ema_model: bool = False):
+    def forward(self, x, hide=None, noise=None, mode='encode'):
+        assert mode in ['encode', 'decode'], f'{mode} is not valid option'
         with amp.autocast(False):
-            model = self.model
-            gen = self.eval_sampler.sample(model=model, noise=noise, x_start=x_start)
-            return gen
+            if mode == 'encode':
+                assert hide is not None, 'Expecting two inputs when encoding'
+                model = self.model.encoder
+                cover = x
+                c_cond = model.encode(cover)['cond'].detach()
+                h_cond = model.encode(hide)['cond'].detach()
+                gen = self.eval_sampler.sample(model=model, cond=c_cond, h_cond=h_cond, noise=noise, x_start=cover)
+            else:
+                if hide is not None:
+                    print('In decoding mode, hide is being ignored')
+                model = self.model.decoder
+                encoded = x
+                e_cond = model.encode(encoded)['cond'].detach()
+                gen = self.eval_sampler.sample(model=model, cond=e_cond, h_cond=None, noise=noise, x_start=encoded)
+        return gen
 
     def setup(self, stage=None) -> None:
         """

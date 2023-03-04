@@ -3,7 +3,7 @@ from experiment import train
 
 if __name__ == '__main__':
 
-    debug = True
+    debug = False
     if debug:
         gpus = [0]
     else:
@@ -13,7 +13,7 @@ if __name__ == '__main__':
     conf = stegan_config(debug=debug, scale_up_gpus=scale_up_gpus)
     conf.name = 'semantics_02_03_23'
     conf.enc_loss_scale = 0.5
-    conf.sample_on_train_start = True
+    conf.sample_on_train_start = False
 
     train(conf, gpus=gpus)
 

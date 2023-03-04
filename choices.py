@@ -88,9 +88,10 @@ class ModelType(Enum):
     ddpm = 'ddpm'
     # autoencoding ddpm cannot do unconditional generation
     autoencoder = 'autoencoder'
+    stegan = 'stegan'
 
     def has_autoenc(self):
-        return self in [ModelType.autoencoder]
+        return self in [ModelType.autoencoder, ModelType.stegan]
 
     def can_sample(self):
         return self in [ModelType.ddpm]

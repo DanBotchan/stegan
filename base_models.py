@@ -243,9 +243,6 @@ class BaseModel(nn.Module):
                 encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=h_cond)
                 decode_cond = self.decoder.encode(encoded)['cond']
                 decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond, h_cond=None)
-                decode_cond2 = self.decoder.encode(cover)['cond']
-                decoded2 = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond2, h_cond=None)
-                None
             else:
                 raise Exception('Not implemented')
 
