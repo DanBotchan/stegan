@@ -205,12 +205,14 @@ class LitModel(pl.LightningModule):
 
             # with numpy seed we have the problem that the sample t's are related!
             t, weight = self.T_sampler.sample(batch_size, device)
+            noise = torch.randn_like(noise)
             encoder_losses = self.sampler.training_losses(model=self.model.encoder, x_start=x_start_concat, t=t,
                                                           noise=noise,
                                                           model_kwargs={'cover': cover, 'cond': cond, 'h_cond': h_cond})
 
             encoded_pred_xstart = encoder_losses['pred_xstart']
             t, weight = self.T_sampler.sample(batch_size, device)
+            noise = torch.randn_like(noise)
             decoder_losses = self.sampler.training_losses(model=self.model.decoder, x_start=encoded_pred_xstart, t=t,
                                                           noise=noise, model_kwargs={'hide': hide})
 

@@ -43,7 +43,7 @@ def train(conf: TrainConfig, gpus, nodes=1, mode: str = 'train'):
     else:
         accelerator = 'cpu'
 
-    trainer = pl.Trainer(max_steps=conf.total_samples // conf.batch_size_effective + 1, resume_from_checkpoint=resume,
+    trainer = pl.Trainer(max_steps=(conf.total_samples // conf.batch_size_effective) * 4, resume_from_checkpoint=resume,
                          gpus=gpus, num_nodes=nodes, accelerator=accelerator, precision=16 if conf.fp16 else 32,
                          callbacks=[checkpoint, LearningRateMonitor()],
                          # clip in the model instead
