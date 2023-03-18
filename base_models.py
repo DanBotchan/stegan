@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from torchvision.utils import make_grid
 
+from model.unet import BeatGANsUNetConfig
 from model.unet_autoenc import BeatGANsAutoencConfig, BeatGANsEncoderConfig
 from renderer import render_condition
 from utils import BaseReturn, show_tensor_image
@@ -99,6 +100,8 @@ class BaseModel(nn.Module):
             self._setup_images_stegan_model(self.conf)
         elif self.stegan_type == SteganType.semantics:
             self._setup_semantics_stegan_model(self.conf)
+        elif self.stegan_type == SteganType.deter_decode:
+            self._setup_deter_decode_model(self.conf)
 
     def _setup_images_stegan_model(self, conf):
         self.encoder = self._setup_encoder_by_conf(conf)
@@ -108,7 +111,7 @@ class BaseModel(nn.Module):
         self.encoder = self._setup_encoder_by_conf(conf)
         self.decoder = self._setup_decoder_by_conf(conf)
 
-        #self.decoder = self._setup_semantic_decoder_by_conf(conf)
+        # self.decoder = self._setup_semantic_decoder_by_conf(conf)
         if conf.encoder_pretrain:
             print(f'loading pretrain ... {conf.encoder_pretrain}')
             state = torch.load(conf.encoder_pretrain, map_location='cpu')
@@ -135,6 +138,25 @@ class BaseModel(nn.Module):
             print('step:', state['global_step'])
             self.decoder.load_state_dict(new_state_dict, strict=False)
 
+    def _setup_deter_decode_model(self, conf):
+        self.encoder = self._setup_encoder_by_conf(conf)
+        self.decoder = self._setup_deter_decoder_by_conf(conf)
+        # self.decoder = self._setup_semantic_decoder_by_conf(conf)
+        if conf.encoder_pretrain:
+            print(f'loading pretrain ... {conf.encoder_pretrain}')
+            state = torch.load(conf.encoder_pretrain, map_location='cpu')
+            new_state_dict = {}
+            for k, v in state['state_dict'].items():
+                if k == 'x_T':
+                    pass
+                else:
+                    new_state_dict[k.replace('model.', '')] = v
+            print('step:', state['global_step'])
+            self.encoder.load_state_dict(new_state_dict, strict=False)
+            for n, p in self.encoder.named_parameters():
+                if n.startswith('encoder'):
+                    p.requires_grad = False
+            print('Freezed the Encoder, encoder')
 
     def _setup_encoder_by_conf(self, conf):
         model = BeatGANsAutoencConfig(
@@ -212,7 +234,7 @@ class BaseModel(nn.Module):
                                       model_channels=conf.model_channels, out_hid_channels=conf.net_enc_out,
                                       out_channels=conf.net_enc_out, num_res_blocks=conf.num_res_blocks,
                                       attention_resolutions=(
-                                                  conf.net_enc_attn_resolutions or conf.attention_resolutions),
+                                              conf.net_enc_attn_resolutions or conf.attention_resolutions),
                                       dropout=conf.dropout,
                                       channel_mult=conf.net_enc_channel_mult or conf.channel_mult,
                                       use_time_condition=False, conv_resample=conf.conv_resample, dims=conf.dims,
@@ -221,6 +243,21 @@ class BaseModel(nn.Module):
                                       resblock_updown=conf.resblock_updown,
                                       use_new_attention_order=conf.use_new_attention_order,
                                       pool=conf.net_enc_pool).make_model()
+        return model
+
+    def _setup_deter_decoder_by_conf(self, conf):
+        model = BeatGANsUNetConfig(image_size=conf.image_size, in_channels=conf.dec_in_channels,
+                                   model_channels=conf.model_channels, out_channels=3,
+                                   num_res_blocks=conf.num_res_blocks, dropout=conf.dropout,
+                                   attention_resolutions=conf.attention_resolutions,
+                                   channel_mult=conf.channel_mult, conv_resample=conf.conv_resample, dims=conf.dims,
+                                   use_checkpoint=conf.use_checkpoint, num_heads=conf.num_heads,
+                                   num_head_channels=conf.num_head_channels, resnet_cond=False,
+                                   resblock_updown=conf.resblock_updown,
+                                   use_new_attention_order=conf.use_new_attention_order).make_model()
+        for n, p in model.named_parameters():
+            if 'time_embed' in n:
+                p.requires_grad=False
         return model
 
     def forward(self, cover, hide, c_noise, sampler=None):
@@ -243,10 +280,12 @@ class BaseModel(nn.Module):
                 encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=h_cond)
                 decode_cond = self.decoder.encode(encoded)['cond']
                 decoded = render_condition(self.decoder, c_noise, sampler=sampler, cond=decode_cond, h_cond=None)
+            elif self.stegan_type == SteganType.deter_decode:
+                encode_cond = self.encoder.encode(cover)['cond'].detach()
+                h_cond = self.encoder.encode(hide)['cond'].detach()
+                encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=h_cond)
+                decoded = self.decoder(encoded, t=torch.zeros(len(encoded), device=encoded.device)).pred
             else:
                 raise Exception('Not implemented')
-
-
-
 
         return BaseReturn(encoded=encoded, decoded=decoded)

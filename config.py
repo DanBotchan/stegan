@@ -318,34 +318,17 @@ class TrainConfig(BaseConfig):
     def make_model_conf(self):
         if self.model_name == ModelName.steganography:
             self.model_conf = SteganConfig(
-                enc_in_channels=self.enc_in_channels,
-                dec_in_channels=3,
-                enc_cond_vec_size=self.net_enc_out,
-                dec_cond_vec_size=512,
-                attention_resolutions=self.net_attn,
-                channel_mult=self.net_ch_mult,
-                conv_resample=True,
-                dims=2,
-                dropout=self.dropout,
-                embed_channels=self.net_beatgans_embed_channels,
-                image_size=self.img_size,
-                model_channels=self.net_ch,
-                num_classes=None,
-                num_head_channels=-1,
-                num_heads_upsample=-1,
-                num_heads=self.net_beatgans_attn_head,
-                num_res_blocks=self.net_num_res_blocks,
-                num_input_res_blocks=self.net_num_input_res_blocks,
-                out_channels=self.model_out_channels,
-                resblock_updown=self.net_resblock_updown,
-                use_checkpoint=self.net_beatgans_gradient_checkpoint,
-                use_new_attention_order=False,
-                resnet_two_cond=self.net_beatgans_resnet_two_cond,
+                enc_in_channels=self.enc_in_channels, dec_in_channels=3, enc_cond_vec_size=self.net_enc_out,
+                dec_cond_vec_size=512, attention_resolutions=self.net_attn, channel_mult=self.net_ch_mult,
+                conv_resample=True, dims=2, dropout=self.dropout, embed_channels=self.net_beatgans_embed_channels,
+                image_size=self.img_size, model_channels=self.net_ch, num_classes=None, num_head_channels=-1,
+                num_heads_upsample=-1, num_heads=self.net_beatgans_attn_head, num_res_blocks=self.net_num_res_blocks,
+                num_input_res_blocks=self.net_num_input_res_blocks, out_channels=self.model_out_channels,
+                resblock_updown=self.net_resblock_updown, use_checkpoint=self.net_beatgans_gradient_checkpoint,
+                use_new_attention_order=False, resnet_two_cond=self.net_beatgans_resnet_two_cond,
                 resnet_three_cond=self.net_beatgans_resnet_three_cond,
-                resnet_use_zero_module=self.net_beatgans_resnet_use_zero_module,
-                net_enc_pool=self.net_enc_pool,
-                stegan_type=self.stegan_type,
-                encoder_pretrain=self.encoder_pretrain
+                resnet_use_zero_module=self.net_beatgans_resnet_use_zero_module, net_enc_pool=self.net_enc_pool,
+                stegan_type=self.stegan_type, encoder_pretrain=self.encoder_pretrain
             )
         else:
             raise NotImplementedError(self.model_name)

@@ -62,6 +62,7 @@ class BeatGANsUNetConfig(BaseConfig):
     resblock_updown: bool = True
     # never tried
     use_new_attention_order: bool = False
+    resnet_cond: bool = True
     resnet_two_cond: bool = False
     resnet_three_cond: bool = False
     resnet_cond_channels: int = None
@@ -86,25 +87,19 @@ class BeatGANsUNetModel(nn.Module):
         self.dtype = th.float32
 
         self.time_emb_channels = conf.time_embed_channels or conf.model_channels
-        self.time_embed = nn.Sequential(
-            linear(self.time_emb_channels, conf.embed_channels),
-            nn.SiLU(),
-            linear(conf.embed_channels, conf.embed_channels),
-        )
+        self.time_embed = nn.Sequential(linear(self.time_emb_channels, conf.embed_channels), nn.SiLU(),
+                                        linear(conf.embed_channels, conf.embed_channels))
 
         if conf.num_classes is not None:
             self.label_emb = nn.Embedding(conf.num_classes, conf.embed_channels)
 
         ch = input_ch = int(conf.channel_mult[0] * conf.model_channels)
         self.input_blocks = nn.ModuleList([
-            TimestepEmbedSequential(
-                conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))
+            TimestepEmbedSequential(conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))
         ])
 
-        kwargs = dict(use_condition=True, two_cond=conf.resnet_two_cond, three_cond=conf.resnet_three_cond,
-                      use_zero_module=conf.resnet_use_zero_module,
-                      # style channels for the resnet block
-                      cond_emb_channels=conf.resnet_cond_channels)
+        kwargs = dict(use_condition=conf.resnet_cond, two_cond=conf.resnet_two_cond, three_cond=conf.resnet_three_cond,
+                      use_zero_module=conf.resnet_use_zero_module, cond_emb_channels=conf.resnet_cond_channels)
 
         self._feature_size = ch
 

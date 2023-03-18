@@ -9,6 +9,7 @@ class SteganType(Enum):
 
     images = 'images'  # the model encode images
     semantics = 'semantics' # the model encode with two conditions
+    deter_decode = 'deter_decode'
 
 class TrainMode(Enum):
     # manipulate mode = training the classifier

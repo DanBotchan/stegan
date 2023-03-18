@@ -130,7 +130,7 @@ class GaussianDiffusionBeatGans:
             model_output = model_forward.pred
             _model_output = model_output
 
-            #we are in decoder
+            # we are in decoder
             if 'hide' in model_kwargs.keys():
                 terms['cond'] = model_forward.cond.float()
 
@@ -182,7 +182,7 @@ class GaussianDiffusionBeatGans:
                                       model_kwargs=model_kwargs, progress=progress)
         elif self.conf.gen_type == GenerativeType.ddim:
             return self.ddim_sample_loop(model, shape=shape, noise=noise, clip_denoised=clip_denoised,
-                                         model_kwargs=model_kwargs, progress=progress)
+                                         model_kwargs=model_kwargs, progress=progress,  cond_fn=None)
         else:
             raise NotImplementedError()
 
@@ -377,8 +377,7 @@ class GaussianDiffusionBeatGans:
 
         out = p_mean_var.copy()
         out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
-        out["mean"], _, _ = self.q_posterior_mean_variance(
-            x_start=out["pred_xstart"], x_t=x, t=t)
+        out["mean"], _, _ = self.q_posterior_mean_variance(x_start=out["pred_xstart"], x_t=x, t=t)
         return out
 
     def p_sample(

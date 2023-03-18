@@ -76,7 +76,7 @@ class LitModel(pl.LightningModule):
             sampler = self.eval_sampler
         else:
             sampler = self.conf._make_diffusion_conf(T).make_sampler()
-        model = self.model.encoder if mode=='encode' else self.model.decoder
+        model = self.model.encoder if mode == 'encode' else self.model.decoder
         out = sampler.ddim_reverse_sample_loop(model, x, model_kwargs={'cond': cond})
         return out['sample']
 
@@ -91,12 +91,15 @@ class LitModel(pl.LightningModule):
                 h_cond = model.encode(hide)['cond'].detach()
                 gen = self.eval_sampler.sample(model=model, cond=c_cond, h_cond=h_cond, noise=noise, x_start=cover)
             else:
+                model = self.model.decoder
                 if hide is not None:
                     print('In decoding mode, hide is being ignored')
-                model = self.model.decoder
                 encoded = x
-                e_cond = model.encode(encoded)['cond'].detach()
-                gen = self.eval_sampler.sample(model=model, cond=e_cond, h_cond=None, noise=noise, x_start=encoded)
+                if self.conf.stegan_type == SteganType.semantics:
+                    e_cond = model.encode(encoded)['cond'].detach()
+                    gen = self.eval_sampler.sample(model=model, cond=e_cond, h_cond=None, noise=noise, x_start=encoded)
+                elif self.conf.stegan_type == SteganType.deter_decode:
+                    gen = model(encoded, t=torch.zeros(len(encoded), device=encoded.device)).pred
         return gen
 
     def setup(self, stage=None) -> None:
@@ -197,9 +200,10 @@ class LitModel(pl.LightningModule):
                 cond = None
                 h_cond = None
 
-            elif self.stegan_type == SteganType.semantics:
-                semantic = True
-                x_start_concat = torch.randn_like(cover).detach()  # doesn't matter because its ignored if cond are not None
+            elif self.stegan_type == SteganType.semantics or self.stegan_type==SteganType.deter_decode:
+                semantic = True if self.stegan_type == SteganType.semantics else False
+                x_start_concat = torch.randn_like(
+                    cover).detach()  # doesn't matter because its ignored if cond are not None
                 cond = self.model.encoder.encode(cover)['cond'].detach()
                 h_cond = self.model.encoder.encode(hide)['cond'].detach()
 
@@ -213,10 +217,16 @@ class LitModel(pl.LightningModule):
             encoded_pred_xstart = encoder_losses['pred_xstart']
             t, weight = self.T_sampler.sample(batch_size, device)
             noise = torch.randn_like(noise)
-            decoder_losses = self.sampler.training_losses(model=self.model.decoder, x_start=encoded_pred_xstart, t=t,
-                                                          noise=noise, model_kwargs={'hide': hide})
 
+            if self.stegan_type == SteganType.semantics or self.stegan_type == SteganType.images:
+                decoder_losses = self.sampler.training_losses(model=self.model.decoder, x_start=encoded_pred_xstart,
+                                                              t=t, noise=noise, model_kwargs={'hide': hide})
+            elif self.stegan_type == SteganType.deter_decode:
+                decoded = self.model.decoder(encoded_pred_xstart, t=t).pred
+                decode_loss = self.mse_loss(decoded, hide)
+                decoder_losses = { 'loss': decode_loss }
             loss = self.conf.enc_loss_scale * encoder_losses['loss'].mean() + decoder_losses['loss'].mean()
+
             if semantic:
                 hidden_vector_loss = self.mse_loss(decoder_losses['cond'], h_cond).mean()
                 loss += hidden_vector_loss
@@ -283,6 +293,7 @@ class LitModel(pl.LightningModule):
         cover = cover[:8]
         hide = hide[:8]
         noise = noise[:8]
+
         def do(model, postfix, save_real=False):
             model.eval()
             with torch.no_grad():
@@ -292,7 +303,6 @@ class LitModel(pl.LightningModule):
                         gen = self.model(cover=c, hide=h, c_noise=n, sampler=self.eval_sampler)
                     l_encoded.append(gen.encoded)
                     l_decoded.append(gen.decoded)
-
 
                 encoded_imgs = self.all_gather(torch.cat(l_encoded))
                 decoded_imgs = self.all_gather(torch.cat(l_decoded))
