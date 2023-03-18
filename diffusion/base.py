@@ -165,7 +165,7 @@ class GaussianDiffusionBeatGans:
         return terms
 
     def sample(self, model: Model, shape=None, noise=None, cond=None, h_cond=None, x_start=None, clip_denoised=True,
-               model_kwargs=None, progress=False):
+               model_kwargs=None, progress=False, cond_fn=None):
         """
         Args:
             x_start: given for the autoencoder
@@ -182,7 +182,7 @@ class GaussianDiffusionBeatGans:
                                       model_kwargs=model_kwargs, progress=progress)
         elif self.conf.gen_type == GenerativeType.ddim:
             return self.ddim_sample_loop(model, shape=shape, noise=noise, clip_denoised=clip_denoised,
-                                         model_kwargs=model_kwargs, progress=progress,  cond_fn=None)
+                                         model_kwargs=model_kwargs, progress=progress,  cond_fn=cond_fn)
         else:
             raise NotImplementedError()
 
@@ -372,8 +372,7 @@ class GaussianDiffusionBeatGans:
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
 
         eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
-        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(
-            x, self._scale_timesteps(t), **model_kwargs)
+        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(x, t, self.p_mean_variance, **model_kwargs)
 
         out = p_mean_var.copy()
         out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
@@ -535,7 +534,7 @@ class GaussianDiffusionBeatGans:
         out = self.p_mean_variance(model, x, t, clip_denoised=clip_denoised, denoised_fn=denoised_fn,
                                    model_kwargs=model_kwargs)
         if cond_fn is not None:
-            out = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
+            out = self.condition_decoder_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
 
         # Usually our model outputs epsilon, but we re-derive it
         # in case we used x_start or x_prev prediction.

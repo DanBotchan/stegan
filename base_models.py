@@ -257,8 +257,17 @@ class BaseModel(nn.Module):
                                    use_new_attention_order=conf.use_new_attention_order).make_model()
         for n, p in model.named_parameters():
             if 'time_embed' in n:
-                p.requires_grad=False
+                p.requires_grad = False
         return model
+
+    def cond_fn(self, x, t, p_mean, **model_kwargs):
+        with torch.enable_grad():
+            if self.stegan_type == SteganType.deter_decode:
+                x = x.detach().requires_grad_()
+                pred_xstart = p_mean(self.encoder, x, t, model_kwargs=model_kwargs)['pred_xstart']
+                decoded = self.decoder(pred_xstart, t=t).pred
+                loss = torch.nn.MSELoss()(decoded, model_kwargs['hide'])
+                return -torch.autograd.grad(loss, x)[0]
 
     def forward(self, cover, hide, c_noise, sampler=None):
         assert (sampler), 'Need to define a sampelr'
@@ -283,7 +292,8 @@ class BaseModel(nn.Module):
             elif self.stegan_type == SteganType.deter_decode:
                 encode_cond = self.encoder.encode(cover)['cond'].detach()
                 h_cond = self.encoder.encode(hide)['cond'].detach()
-                encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=h_cond)
+                encoded = render_condition(self.encoder, c_noise, sampler=sampler, cond=encode_cond, h_cond=h_cond,
+                                           hide=hide, cond_fn=self.cond_fn)
                 decoded = self.decoder(encoded, t=torch.zeros(len(encoded), device=encoded.device)).pred
             else:
                 raise Exception('Not implemented')

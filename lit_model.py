@@ -70,26 +70,31 @@ class LitModel(pl.LightningModule):
         cond = self.ema_model.encoder.forward(x)
         return cond
 
-    def encode_stochastic(self, x, cond, T=None, mode='encode'):
+    def encode_stochastic(self, x, cond, h_cond=None, T=None, mode='encode'):
         assert mode in ['encode', 'decode'], f'{mode} is not valid option'
         if T is None:
             sampler = self.eval_sampler
         else:
             sampler = self.conf._make_diffusion_conf(T).make_sampler()
         model = self.model.encoder if mode == 'encode' else self.model.decoder
-        out = sampler.ddim_reverse_sample_loop(model, x, model_kwargs={'cond': cond})
+        out = sampler.ddim_reverse_sample_loop(model, x, model_kwargs={'cond': cond, 'h_cond': h_cond})
         return out['sample']
 
-    def forward(self, x, hide=None, noise=None, mode='encode'):
+    def forward(self, x, hide=None, noise=None, mode='encode', c_guidance=False):
         assert mode in ['encode', 'decode'], f'{mode} is not valid option'
         with amp.autocast(False):
+            model_kwargs = {'hide': hide, 'cover': x}
             if mode == 'encode':
                 assert hide is not None, 'Expecting two inputs when encoding'
                 model = self.model.encoder
                 cover = x
                 c_cond = model.encode(cover)['cond'].detach()
                 h_cond = model.encode(hide)['cond'].detach()
-                gen = self.eval_sampler.sample(model=model, cond=c_cond, h_cond=h_cond, noise=noise, x_start=cover)
+                conda_fn = self.model.cond_fn if c_guidance else None
+                model_kwargs['cond'] = c_cond
+                model_kwargs['h_cond'] = h_cond
+                gen = self.eval_sampler.sample(model=model, cond=c_cond, h_cond=h_cond, noise=noise, x_start=cover,
+                                               cond_fn=conda_fn, model_kwargs=model_kwargs)
             else:
                 model = self.model.decoder
                 if hide is not None:
@@ -97,7 +102,8 @@ class LitModel(pl.LightningModule):
                 encoded = x
                 if self.conf.stegan_type == SteganType.semantics:
                     e_cond = model.encode(encoded)['cond'].detach()
-                    gen = self.eval_sampler.sample(model=model, cond=e_cond, h_cond=None, noise=noise, x_start=encoded)
+                    gen = self.eval_sampler.sample(model=model, cond=e_cond, h_cond=None, noise=noise, x_start=encoded,
+                                                   model_kwargs=model_kwargs)
                 elif self.conf.stegan_type == SteganType.deter_decode:
                     gen = model(encoded, t=torch.zeros(len(encoded), device=encoded.device)).pred
         return gen
@@ -200,7 +206,7 @@ class LitModel(pl.LightningModule):
                 cond = None
                 h_cond = None
 
-            elif self.stegan_type == SteganType.semantics or self.stegan_type==SteganType.deter_decode:
+            elif self.stegan_type == SteganType.semantics or self.stegan_type == SteganType.deter_decode:
                 semantic = True if self.stegan_type == SteganType.semantics else False
                 x_start_concat = torch.randn_like(
                     cover).detach()  # doesn't matter because its ignored if cond are not None
@@ -224,7 +230,7 @@ class LitModel(pl.LightningModule):
             elif self.stegan_type == SteganType.deter_decode:
                 decoded = self.model.decoder(encoded_pred_xstart, t=t).pred
                 decode_loss = self.mse_loss(decoded, hide)
-                decoder_losses = { 'loss': decode_loss }
+                decoder_losses = {'loss': decode_loss}
             loss = self.conf.enc_loss_scale * encoder_losses['loss'].mean() + decoder_losses['loss'].mean()
 
             if semantic:
