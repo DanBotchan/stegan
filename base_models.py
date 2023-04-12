@@ -235,7 +235,8 @@ class BaseModel(nn.Module):
                 pred_xstart = p_mean(self.encoder, x, t, model_kwargs=model_kwargs)['pred_xstart']
                 decoded = self.decoder(pred_xstart, t=t).pred
                 loss = torch.nn.MSELoss()(decoded, model_kwargs['hide'])
-                return -torch.autograd.grad(loss, x)[0] * model_kwargs['weight']
+                gradient = -torch.autograd.grad(loss, x)[0] * model_kwargs['weight']
+                return gradient
 
     def forward(self, cover, hide, c_noise, sampler=None):
         assert (sampler), 'Need to define a sampelr'

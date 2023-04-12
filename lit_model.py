@@ -19,6 +19,7 @@ from utils import WarmupLR, show_tensor_image, is_time
 from metrics import evaluate_fid, evaluate_lpips
 from base_models import LossNetwork
 
+
 class LitModel(pl.LightningModule):
     def __init__(self, conf: TrainConfig):
         super().__init__()
@@ -51,7 +52,7 @@ class LitModel(pl.LightningModule):
 
         self.p_loss_network = LossNetwork(vgg.vgg16(pretrained=True))
         self.p_loss_network.eval()
-        for n,p in self.p_loss_network.named_parameters():
+        for n, p in self.p_loss_network.named_parameters():
             p.requires_grad = False
         self.p_mse_loss = torch.nn.MSELoss()
 
@@ -206,7 +207,7 @@ class LitModel(pl.LightningModule):
             perceptual_loss = None
 
             if self.conf.sample_on_train_start:
-                self(x=cover, hide=hide, noise=noise, mode='encode', c_guidance=True, c_weight=10)
+                self(x=cover, hide=hide, noise=noise, mode='encode', c_guidance=True, c_weight=100)
                 self.log_sample(cover=cover, hide=hide, noise=noise, mode='log_on_start')
                 self.conf.sample_on_train_start = False
 
@@ -220,8 +221,9 @@ class LitModel(pl.LightningModule):
                 semantic = True if self.stegan_type == SteganType.semantics else False
                 x_start_concat = torch.randn_like(
                     cover).detach()  # doesn't matter because its ignored if cond are not None
-                cond = self.model.encoder.encode(cover)['cond'].detach()
-                h_cond = self.model.encoder.encode(hide)['cond'].detach()
+                with torch.no_grad():
+                    cond = self.model.encoder.encode(cover)['cond'].detach()
+                    h_cond = self.model.encoder.encode(hide)['cond'].detach()
 
             # with numpy seed we have the problem that the sample t's are related!
             t, weight = self.T_sampler.sample(batch_size, device)
@@ -651,5 +653,5 @@ class LitModel(pl.LightningModule):
         with torch.no_grad():
             f_xc_c = features_xc[2].detach()
         loss_c = self.p_mse_loss(features_y[2], f_xc_c)
-        loss = loss_c # * weight?
+        loss = loss_c  # * weight?
         return loss

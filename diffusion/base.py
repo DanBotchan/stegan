@@ -355,8 +355,7 @@ class GaussianDiffusionBeatGans:
         This uses the conditioning strategy from Sohl-Dickstein et al. (2015).
         """
         gradient = cond_fn(x, self._scale_timesteps(t), **model_kwargs)
-        new_mean = (p_mean_var["mean"].float() +
-                    p_mean_var["variance"] * gradient.float())
+        new_mean = (p_mean_var["mean"].float() + p_mean_var["variance"] * gradient.float())
         return new_mean
 
     def condition_score(self, cond_fn, p_mean_var, x, t, model_kwargs=None):
@@ -371,24 +370,16 @@ class GaussianDiffusionBeatGans:
         """
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
 
+        model_kwargs['p_mean'] =  self.p_mean_variance
         eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
-        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(x, t, self.p_mean_variance, **model_kwargs)
+        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(x, self._scale_timesteps(t), **model_kwargs)
 
         out = p_mean_var.copy()
         out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
         out["mean"], _, _ = self.q_posterior_mean_variance(x_start=out["pred_xstart"], x_t=x, t=t)
         return out
 
-    def p_sample(
-            self,
-            model: Model,
-            x,
-            t,
-            clip_denoised=True,
-            denoised_fn=None,
-            cond_fn=None,
-            model_kwargs=None,
-    ):
+    def p_sample(self, model: Model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, ):
         """
         Sample x_{t-1} from the model at the given timestep.
 
@@ -406,25 +397,13 @@ class GaussianDiffusionBeatGans:
                  - 'sample': a random sample from the model.
                  - 'pred_xstart': a prediction of x_0.
         """
-        out = self.p_mean_variance(
-            model,
-            x,
-            t,
-            clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn,
-            model_kwargs=model_kwargs,
-        )
+        out = self.p_mean_variance(model, x, t, clip_denoised=clip_denoised, denoised_fn=denoised_fn,
+                                   model_kwargs=model_kwargs, )
         noise = th.randn_like(x)
-        nonzero_mask = ((t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
-                        )  # no noise when t == 0
+        nonzero_mask = ((t != 0).float().view(-1, *([1] * (len(x.shape) - 1))))  # no noise when t == 0
         if cond_fn is not None:
-            out["mean"] = self.condition_mean(cond_fn,
-                                              out,
-                                              x,
-                                              t,
-                                              model_kwargs=model_kwargs)
-        sample = out["mean"] + nonzero_mask * th.exp(
-            0.5 * out["log_variance"]) * noise
+            out["mean"] = self.condition_mean(cond_fn, out, x, t, model_kwargs=model_kwargs)
+        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
     def p_sample_loop(
