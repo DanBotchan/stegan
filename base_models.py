@@ -1,4 +1,5 @@
 from typing import Tuple
+from collections import namedtuple
 from dataclasses import dataclass
 
 import torch
@@ -11,6 +12,8 @@ from renderer import render_condition
 from utils import BaseReturn, show_tensor_image
 from config_base import BaseConfig
 from choices import SteganType
+
+LossOutput = namedtuple("LossOutput", ["relu1_2", "relu2_2", "relu3_3", "relu4_3"])
 
 
 @dataclass
@@ -159,74 +162,39 @@ class BaseModel(nn.Module):
             print('Freezed the Encoder, encoder')
 
     def _setup_encoder_by_conf(self, conf):
-        model = BeatGANsAutoencConfig(
-            attention_resolutions=conf.attention_resolutions,
-            channel_mult=conf.channel_mult,
-            conv_resample=True,
-            dims=2,
-            dropout=conf.dropout,
-            embed_channels=conf.embed_channels,
-            enc_out_channels=conf.net_enc_out,
-            enc_pool=conf.net_enc_pool,
-            enc_num_res_block=conf.net_enc_num_res_blocks,
-            enc_channel_mult=conf.net_enc_channel_mult,
-            enc_grad_checkpoint=conf.net_enc_grad_checkpoint,
-            enc_attn_resolutions=conf.net_enc_attn_resolutions,
-            enc_in_channels=conf.enc_in_channels,
-            image_size=conf.image_size,
-            in_channels=conf.in_channels,
-            model_channels=conf.model_channels,
-            num_classes=None,
-            num_head_channels=-1,
-            num_heads_upsample=-1,
-            num_heads=conf.num_heads,
-            num_res_blocks=conf.num_res_blocks,
-            num_input_res_blocks=conf.num_input_res_blocks,
-            out_channels=conf.out_channels,
-            resblock_updown=conf.resblock_updown,
-            use_checkpoint=conf.use_checkpoint,
-            use_new_attention_order=False,
-            resnet_two_cond=conf.resnet_two_cond,
-            resnet_three_cond=conf.resnet_three_cond,
-            resnet_use_zero_module=conf.resnet_use_zero_module,
-            latent_net_conf=None,
-            resnet_cond_channels=conf.enc_cond_vec_size,
-        ).make_model()
+        model = BeatGANsAutoencConfig(attention_resolutions=conf.attention_resolutions, channel_mult=conf.channel_mult,
+                                      conv_resample=True, dims=2, dropout=conf.dropout,
+                                      embed_channels=conf.embed_channels, enc_out_channels=conf.net_enc_out,
+                                      enc_pool=conf.net_enc_pool, enc_num_res_block=conf.net_enc_num_res_blocks,
+                                      enc_channel_mult=conf.net_enc_channel_mult,
+                                      enc_grad_checkpoint=conf.net_enc_grad_checkpoint,
+                                      enc_attn_resolutions=conf.net_enc_attn_resolutions,
+                                      enc_in_channels=conf.enc_in_channels, image_size=conf.image_size,
+                                      in_channels=conf.in_channels, model_channels=conf.model_channels,
+                                      num_classes=None, num_head_channels=-1, num_heads_upsample=-1,
+                                      num_heads=conf.num_heads, num_res_blocks=conf.num_res_blocks,
+                                      num_input_res_blocks=conf.num_input_res_blocks, out_channels=conf.out_channels,
+                                      resblock_updown=conf.resblock_updown, use_checkpoint=conf.use_checkpoint,
+                                      use_new_attention_order=False, resnet_two_cond=conf.resnet_two_cond,
+                                      resnet_three_cond=conf.resnet_three_cond,
+                                      resnet_use_zero_module=conf.resnet_use_zero_module, latent_net_conf=None,
+                                      resnet_cond_channels=conf.enc_cond_vec_size, ).make_model()
         return model
 
     def _setup_decoder_by_conf(self, conf):
         model = BeatGANsAutoencConfig(
-            attention_resolutions=conf.attention_resolutions,
-            channel_mult=conf.channel_mult,
-            conv_resample=True,
-            dims=2,
-            dropout=conf.dropout,
-            embed_channels=conf.embed_channels,
-            enc_out_channels=conf.net_enc_out,
-            enc_pool=conf.net_enc_pool,
-            enc_num_res_block=conf.net_enc_num_res_blocks,
-            enc_channel_mult=conf.net_enc_channel_mult,
-            enc_grad_checkpoint=conf.net_enc_grad_checkpoint,
-            enc_attn_resolutions=conf.net_enc_attn_resolutions,
-            image_size=conf.image_size,
-            in_channels=conf.dec_in_channels,
-            model_channels=conf.model_channels,
-            num_classes=None,
-            num_head_channels=-1,
-            num_heads_upsample=-1,
-            num_heads=conf.num_heads,
-            num_res_blocks=conf.num_res_blocks,
-            num_input_res_blocks=conf.num_input_res_blocks,
-            out_channels=conf.out_channels,
-            resblock_updown=conf.resblock_updown,
-            use_checkpoint=conf.use_checkpoint,
-            use_new_attention_order=False,
-            resnet_two_cond=conf.resnet_two_cond,
-            resnet_three_cond=False,
-            resnet_use_zero_module=conf.resnet_use_zero_module,
-            latent_net_conf=None,
-            resnet_cond_channels=conf.dec_cond_vec_size,
-        ).make_model()
+            attention_resolutions=conf.attention_resolutions, channel_mult=conf.channel_mult, conv_resample=True,
+            dims=2, dropout=conf.dropout, embed_channels=conf.embed_channels, enc_out_channels=conf.net_enc_out,
+            enc_pool=conf.net_enc_pool, enc_num_res_block=conf.net_enc_num_res_blocks,
+            enc_channel_mult=conf.net_enc_channel_mult, enc_grad_checkpoint=conf.net_enc_grad_checkpoint,
+            enc_attn_resolutions=conf.net_enc_attn_resolutions, image_size=conf.image_size,
+            in_channels=conf.dec_in_channels, model_channels=conf.model_channels, num_classes=None,
+            num_head_channels=-1, num_heads_upsample=-1, num_heads=conf.num_heads, num_res_blocks=conf.num_res_blocks,
+            num_input_res_blocks=conf.num_input_res_blocks, out_channels=conf.out_channels,
+            resblock_updown=conf.resblock_updown, use_checkpoint=conf.use_checkpoint, use_new_attention_order=False,
+            resnet_two_cond=conf.resnet_two_cond, resnet_three_cond=False,
+            resnet_use_zero_module=conf.resnet_use_zero_module, latent_net_conf=None,
+            resnet_cond_channels=conf.dec_cond_vec_size, ).make_model()
         return model
 
     def _setup_semantic_decoder_by_conf(self, conf):
@@ -267,7 +235,7 @@ class BaseModel(nn.Module):
                 pred_xstart = p_mean(self.encoder, x, t, model_kwargs=model_kwargs)['pred_xstart']
                 decoded = self.decoder(pred_xstart, t=t).pred
                 loss = torch.nn.MSELoss()(decoded, model_kwargs['hide'])
-                return -torch.autograd.grad(loss, x)[0]
+                return -torch.autograd.grad(loss, x)[0] * model_kwargs['weight']
 
     def forward(self, cover, hide, c_noise, sampler=None):
         assert (sampler), 'Need to define a sampelr'
@@ -299,3 +267,23 @@ class BaseModel(nn.Module):
                 raise Exception('Not implemented')
 
         return BaseReturn(encoded=encoded, decoded=decoded)
+
+
+class LossNetwork(nn.Module):
+    def __init__(self, vgg_model):
+        super(LossNetwork, self).__init__()
+        self.vgg_layers = vgg_model.features
+        self.layer_name_mapping = {
+            '3': "relu1_2",
+            '8': "relu2_2",
+            '15': "relu3_3",
+            '22': "relu4_3"
+        }
+
+    def forward(self, x):
+        output = {}
+        for name, module in self.vgg_layers._modules.items():
+            x = module(x)
+            if name in self.layer_name_mapping:
+                output[self.layer_name_mapping[name]] = x
+        return LossOutput(**output)

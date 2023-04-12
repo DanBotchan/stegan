@@ -9,6 +9,7 @@ from torch.optim.optimizer import Optimizer
 from torch.autograd import grad
 from torch.cuda import amp
 from torchvision.utils import make_grid, save_image
+import torchvision.models.vgg as vgg
 
 from lmdb_writer import *
 from config import TrainConfig, TrainMode
@@ -16,7 +17,7 @@ from dist_utils import get_world_size
 from choices import OptimizerType, SteganType
 from utils import WarmupLR, show_tensor_image, is_time
 from metrics import evaluate_fid, evaluate_lpips
-
+from base_models import LossNetwork
 
 class LitModel(pl.LightningModule):
     def __init__(self, conf: TrainConfig):
@@ -47,6 +48,12 @@ class LitModel(pl.LightningModule):
         self.eval_latent_sampler = None
         self.conds_mean = None
         self.conds_std = None
+
+        self.p_loss_network = LossNetwork(vgg.vgg16(pretrained=True))
+        self.p_loss_network.eval()
+        for n,p in self.p_loss_network.named_parameters():
+            p.requires_grad = False
+        self.p_mse_loss = torch.nn.MSELoss()
 
         self.mse_loss = torch.nn.MSELoss()
         if conf.pretrain is not None:
@@ -80,7 +87,7 @@ class LitModel(pl.LightningModule):
         out = sampler.ddim_reverse_sample_loop(model, x, model_kwargs={'cond': cond, 'h_cond': h_cond})
         return out['sample']
 
-    def forward(self, x, hide=None, noise=None, mode='encode', c_guidance=False):
+    def forward(self, x, hide=None, noise=None, mode='encode', c_guidance=False, c_weight=1.):
         assert mode in ['encode', 'decode'], f'{mode} is not valid option'
         with amp.autocast(False):
             model_kwargs = {'hide': hide, 'cover': x}
@@ -93,6 +100,7 @@ class LitModel(pl.LightningModule):
                 conda_fn = self.model.cond_fn if c_guidance else None
                 model_kwargs['cond'] = c_cond
                 model_kwargs['h_cond'] = h_cond
+                model_kwargs['weight'] = c_weight
                 gen = self.eval_sampler.sample(model=model, cond=c_cond, h_cond=h_cond, noise=noise, x_start=cover,
                                                cond_fn=conda_fn, model_kwargs=model_kwargs)
             else:
@@ -195,8 +203,10 @@ class LitModel(pl.LightningModule):
             cover, hide, noise = batch['cover'], batch['hide'], batch['noise']
             batch_size = cover.shape[0]
             device = cover.device
+            perceptual_loss = None
 
             if self.conf.sample_on_train_start:
+                self(x=cover, hide=hide, noise=noise, mode='encode', c_guidance=True, c_weight=10)
                 self.log_sample(cover=cover, hide=hide, noise=noise, mode='log_on_start')
                 self.conf.sample_on_train_start = False
 
@@ -231,11 +241,16 @@ class LitModel(pl.LightningModule):
                 decoded = self.model.decoder(encoded_pred_xstart, t=t).pred
                 decode_loss = self.mse_loss(decoded, hide)
                 decoder_losses = {'loss': decode_loss}
+                perceptual_loss = self.perceptual_loss(hide, decoded) * 0.05
+
             loss = self.conf.enc_loss_scale * encoder_losses['loss'].mean() + decoder_losses['loss'].mean()
 
             if semantic:
                 hidden_vector_loss = self.mse_loss(decoder_losses['cond'], h_cond).mean()
                 loss += hidden_vector_loss
+
+            if perceptual_loss:
+                loss += perceptual_loss.mean()
 
             # divide by accum batches to make the accumulated gradient exact!
             for key in ['loss', 'vae']:
@@ -244,6 +259,8 @@ class LitModel(pl.LightningModule):
                     decoder_losses[key] = self.all_gather(decoder_losses[key]).mean()
                     if semantic:
                         hidden_vector_loss = self.all_gather(hidden_vector_loss).mean()
+                    if perceptual_loss:
+                        perceptual_loss = self.all_gather(perceptual_loss).mean()
 
             if self.global_rank == 0:
                 self.logger.experiment.add_scalar('Total Loss', loss, self.num_samples)
@@ -251,6 +268,9 @@ class LitModel(pl.LightningModule):
                 self.logger.experiment.add_scalar('Decoder Loss', decoder_losses['loss'], self.num_samples)
                 if semantic:
                     self.logger.experiment.add_scalar('Vector MSE Loss', hidden_vector_loss, self.num_samples)
+                if perceptual_loss:
+                    self.logger.experiment.add_scalar('Perceptual Loss', perceptual_loss, self.num_samples)
+
             self.log('train_loss', loss, on_epoch=True)
 
         return {'loss': loss}
@@ -622,3 +642,14 @@ class LitModel(pl.LightningModule):
                                        use_inverted_noise=True)
                 for k, v in score.items():
                     self.log(f'{k}_inv_ema_T{T}', v)
+
+    def perceptual_loss(self, img, outputs):
+        with torch.no_grad():
+            xc = img.detach()
+        features_y = self.p_loss_network(outputs)
+        features_xc = self.p_loss_network(xc)
+        with torch.no_grad():
+            f_xc_c = features_xc[2].detach()
+        loss_c = self.p_mse_loss(features_y[2], f_xc_c)
+        loss = loss_c # * weight?
+        return loss

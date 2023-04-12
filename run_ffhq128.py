@@ -4,7 +4,7 @@ from choices import SteganType
 
 if __name__ == '__main__':
 
-    debug = True
+    debug = False
     if debug:
         gpus = []
     else:
@@ -12,9 +12,9 @@ if __name__ == '__main__':
     scale_up_gpus = len(gpus) if len(gpus) > 0 else 1
 
     conf = stegan_config(debug=debug, scale_up_gpus=scale_up_gpus)
-    conf.name = 'semantics_15_03_23'
-    conf.enc_loss_scale = 0.5
-    conf.sample_on_train_start = True
+    conf.name = 'semantics_10_04_23'
+    conf.enc_loss_scale = 0.7
+    conf.sample_on_train_start = False
     conf.stegan_type = SteganType.deter_decode
     train(conf, gpus=gpus)
 

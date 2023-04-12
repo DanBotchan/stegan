@@ -182,7 +182,7 @@ class GaussianDiffusionBeatGans:
                                       model_kwargs=model_kwargs, progress=progress)
         elif self.conf.gen_type == GenerativeType.ddim:
             return self.ddim_sample_loop(model, shape=shape, noise=noise, clip_denoised=clip_denoised,
-                                         model_kwargs=model_kwargs, progress=progress,  cond_fn=cond_fn)
+                                         model_kwargs=model_kwargs, progress=progress, cond_fn=cond_fn)
         else:
             raise NotImplementedError()
 
@@ -569,16 +569,8 @@ class GaussianDiffusionBeatGans:
 
         return {"sample": mean_pred, "pred_xstart": out["pred_xstart"]}
 
-    def ddim_reverse_sample_loop(
-            self,
-            model: Model,
-            x,
-            clip_denoised=True,
-            denoised_fn=None,
-            model_kwargs=None,
-            eta=0.0,
-            device=None,
-    ):
+    def ddim_reverse_sample_loop(self, model: Model, x, clip_denoised=True, denoised_fn=None, model_kwargs=None,
+                                 eta=0.0, device=None):
         if device is None:
             device = next(model.parameters()).device
         sample_t = []
@@ -589,13 +581,8 @@ class GaussianDiffusionBeatGans:
         for i in indices:
             t = th.tensor([i] * len(sample), device=device)
             with th.no_grad():
-                out = self.ddim_reverse_sample(model,
-                                               sample,
-                                               t=t,
-                                               clip_denoised=clip_denoised,
-                                               denoised_fn=denoised_fn,
-                                               model_kwargs=model_kwargs,
-                                               eta=eta)
+                out = self.ddim_reverse_sample(model, sample, t=t, clip_denoised=clip_denoised, denoised_fn=denoised_fn,
+                                               model_kwargs=model_kwargs, eta=eta)
                 sample = out['sample']
                 # [1, ..., T]
                 sample_t.append(sample)
