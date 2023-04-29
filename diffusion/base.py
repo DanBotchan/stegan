@@ -295,8 +295,7 @@ class GaussianDiffusionBeatGans:
 
         if self.model_mean_type in [ModelMeanType.eps]:
             if self.model_mean_type == ModelMeanType.eps:
-                pred_xstart = process_xstart(
-                    self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output))
+                pred_xstart = process_xstart(self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output))
             else:
                 raise NotImplementedError()
             model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
@@ -305,7 +304,7 @@ class GaussianDiffusionBeatGans:
 
         assert (model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape)
         return {"mean": model_mean, "variance": model_variance, "log_variance": model_log_variance,
-                "pred_xstart": pred_xstart, 'model_forward': model_forward}
+                "pred_xstart": pred_xstart, 'model_output': model_output}
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
         assert x_t.shape == eps.shape
@@ -370,13 +369,32 @@ class GaussianDiffusionBeatGans:
         """
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
 
-        model_kwargs['p_mean'] =  self.p_mean_variance
+        model_kwargs['p_mean'] = self.p_mean_variance
         eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
-        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(x, self._scale_timesteps(t), **model_kwargs)
+        eps = eps - (1 - alpha_bar).sqrt() * cond_fn(eps, self._scale_timesteps(t), self.sqrt_one_minus_alphas_cumprod, **model_kwargs)
 
         out = p_mean_var.copy()
-        out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps)
+        out["pred_xstart"] = self._predict_xstart_from_eps(x, t, eps).clamp(-1, 1)
         out["mean"], _, _ = self.q_posterior_mean_variance(x_start=out["pred_xstart"], x_t=x, t=t)
+        return out
+
+    def condition_score_cfg(self, out, x, t, model_kwargs=None):
+        """
+        Compute what the p_mean_variance output would have been, should the
+        model's score function be conditioned by cond_fn.
+
+        See condition_mean() for details on cond_fn.
+
+        Unlike condition_mean(), this instead uses the conditioning strategy
+        from Song et al (2020).
+        """
+        noise_pred = out['model_output']
+        noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
+        eps = noise_pred_cond + model_kwargs['c_weight'] * (noise_pred_cond - noise_pred_uncond)
+        x_star, _ = x.chunk(2)
+        t_star, _ = t.chunk(2)
+        out["pred_xstart"] = self._predict_xstart_from_eps(x_star, t_star, eps)
+        out["pred_xstart"] = th.cat([out["pred_xstart"]] * 2).clamp(-1, 1)
         return out
 
     def p_sample(self, model: Model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, ):
@@ -406,18 +424,8 @@ class GaussianDiffusionBeatGans:
         sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
-    def p_sample_loop(
-            self,
-            model: Model,
-            shape=None,
-            noise=None,
-            clip_denoised=True,
-            denoised_fn=None,
-            cond_fn=None,
-            model_kwargs=None,
-            device=None,
-            progress=False,
-    ):
+    def p_sample_loop(self, model: Model, shape=None, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None,
+                      model_kwargs=None, device=None, progress=False):
         """
         Generate samples from the model.
 
@@ -438,32 +446,14 @@ class GaussianDiffusionBeatGans:
         :return: a non-differentiable batch of samples.
         """
         final = None
-        for sample in self.p_sample_loop_progressive(
-                model,
-                shape,
-                noise=noise,
-                clip_denoised=clip_denoised,
-                denoised_fn=denoised_fn,
-                cond_fn=cond_fn,
-                model_kwargs=model_kwargs,
-                device=device,
-                progress=progress,
-        ):
+        for sample in self.p_sample_loop_progressive(model, shape, noise=noise, clip_denoised=clip_denoised,
+                                                     denoised_fn=denoised_fn, cond_fn=cond_fn,
+                                                     model_kwargs=model_kwargs, device=device, progress=progress, ):
             final = sample
         return final["sample"]
 
-    def p_sample_loop_progressive(
-            self,
-            model: Model,
-            shape=None,
-            noise=None,
-            clip_denoised=True,
-            denoised_fn=None,
-            cond_fn=None,
-            model_kwargs=None,
-            device=None,
-            progress=False,
-    ):
+    def p_sample_loop_progressive(self, model: Model, shape=None, noise=None, clip_denoised=True, denoised_fn=None,
+                                  cond_fn=None, model_kwargs=None, device=None, progress=False, cfg=False):
         """
         Generate samples from the model and yield intermediate samples from
         each timestep of diffusion.
@@ -491,15 +481,8 @@ class GaussianDiffusionBeatGans:
             # t = th.tensor([i] * shape[0], device=device)
             t = th.tensor([i] * len(img), device=device)
             with th.no_grad():
-                out = self.p_sample(
-                    model,
-                    img,
-                    t,
-                    clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn,
-                    cond_fn=cond_fn,
-                    model_kwargs=model_kwargs,
-                )
+                out = self.p_sample(model, img, t, clip_denoised=clip_denoised, denoised_fn=denoised_fn,
+                                    cond_fn=cond_fn, model_kwargs=model_kwargs)
                 yield out
                 img = out["sample"]
 
@@ -616,7 +599,6 @@ class GaussianDiffusionBeatGans:
         if progress:
             # Lazy import so that we don't depend on tqdm.
             from tqdm.auto import tqdm
-
             indices = tqdm(indices)
 
         for i in indices:
@@ -635,13 +617,7 @@ class GaussianDiffusionBeatGans:
                 yield out
                 img = out["sample"]
 
-    def _vb_terms_bpd(self,
-                      model: Model,
-                      x_start,
-                      x_t,
-                      t,
-                      clip_denoised=True,
-                      model_kwargs=None):
+    def _vb_terms_bpd(self, model: Model, x_start, x_t, t, clip_denoised=True, model_kwargs=None):
         """
         Get a term for the variational lower-bound.
 
@@ -654,28 +630,19 @@ class GaussianDiffusionBeatGans:
         """
         true_mean, _, true_log_variance_clipped = self.q_posterior_mean_variance(
             x_start=x_start, x_t=x_t, t=t)
-        out = self.p_mean_variance(model,
-                                   x_t,
-                                   t,
-                                   clip_denoised=clip_denoised,
-                                   model_kwargs=model_kwargs)
+        out = self.p_mean_variance(model, x_t, t, clip_denoised=clip_denoised, model_kwargs=model_kwargs)
         kl = normal_kl(true_mean, true_log_variance_clipped, out["mean"],
                        out["log_variance"])
         kl = mean_flat(kl) / np.log(2.0)
-
-        decoder_nll = -discretized_gaussian_log_likelihood(
-            x_start, means=out["mean"], log_scales=0.5 * out["log_variance"])
+        decoder_nll = -discretized_gaussian_log_likelihood(x_start, means=out["mean"],
+                                                           log_scales=0.5 * out["log_variance"])
         assert decoder_nll.shape == x_start.shape
         decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
 
         # At the first timestep return the decoder NLL,
         # otherwise return KL(q(x_{t-1}|x_t,x_0) || p(x_{t-1}|x_t))
         output = th.where((t == 0), decoder_nll, kl)
-        return {
-            "output": output,
-            "pred_xstart": out["pred_xstart"],
-            'model_forward': out['model_forward'],
-        }
+        return {"output": output, "pred_xstart": out["pred_xstart"], 'model_forward': out['model_forward'], }
 
     def _prior_bpd(self, x_start):
         """
@@ -697,11 +664,7 @@ class GaussianDiffusionBeatGans:
                              logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
-    def calc_bpd_loop(self,
-                      model: Model,
-                      x_start,
-                      clip_denoised=True,
-                      model_kwargs=None):
+    def calc_bpd_loop(self, model: Model, x_start, clip_denoised=True, model_kwargs=None):
         """
         Compute the entire variational lower-bound, measured in bits-per-dim,
         as well as other related quantities.

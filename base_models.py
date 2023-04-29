@@ -228,15 +228,23 @@ class BaseModel(nn.Module):
                 p.requires_grad = False
         return model
 
-    def cond_fn(self, x, t, p_mean, **model_kwargs):
+    def cond_fn(self, x, t, scale, **model_kwargs):
+        fac = scale[t[0].item()]
         with torch.enable_grad():
             if self.stegan_type == SteganType.deter_decode:
                 x = x.detach().requires_grad_()
+                hide = model_kwargs['hide']
+                p_mean = model_kwargs['p_mean']
                 pred_xstart = p_mean(self.encoder, x, t, model_kwargs=model_kwargs)['pred_xstart']
-                decoded = self.decoder(pred_xstart, t=t).pred
-                loss = torch.nn.MSELoss()(decoded, model_kwargs['hide'])
+                x_in = pred_xstart * fac + x * (1-fac)
+                decoded = self.decoder(x_in, t=t).pred
+                loss = torch.nn.MSELoss()(decoded, hide)
+                print(f't={t[0].item()}\tLoss: ', loss.item())
                 gradient = -torch.autograd.grad(loss, x)[0] * model_kwargs['weight']
                 return gradient
+
+    def cond_fn_cfg(self, x, t, p_mean, **model_kwargs):
+        return None
 
     def forward(self, cover, hide, c_noise, sampler=None):
         assert (sampler), 'Need to define a sampelr'

@@ -14,7 +14,7 @@ def stegan_config(debug: bool = False, scale_up_gpus: int = 1):
     conf.encoder_pretrain = 'checkpoints/ffhq128_autoenc_130M/last.ckpt'
 
     conf.num_workers = 16 if not debug else 0
-    conf.batch_size = 50 if not debug else 1
+    conf.batch_size = 58 if not debug else 1
     conf.img_size = 64
 
     conf.name = ''

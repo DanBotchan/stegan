@@ -106,7 +106,10 @@ class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
         return super().condition_score(self._wrap_model(cond_fn), *args, **kwargs)
 
     def condition_decoder_score(self, cond_fn, *args, **kwargs):
-        return super().condition_score(cond_fn, *args, **kwargs)
+        if 'cfg' in kwargs['model_kwargs'] and kwargs['model_kwargs']['cfg']:
+            return super().condition_score_cfg(*args, **kwargs)
+        else:
+            return super().condition_score(cond_fn, *args, **kwargs)
 
     def _wrap_model(self, model: Model):
         if isinstance(model, _WrappedModel):

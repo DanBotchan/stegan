@@ -89,9 +89,10 @@ class LitModel(pl.LightningModule):
         return out['sample']
 
     def forward(self, x, hide=None, noise=None, mode='encode', c_guidance=False, c_weight=1.):
-        assert mode in ['encode', 'decode'], f'{mode} is not valid option'
+        assert mode in ['encode', 'encode_cfg', 'decode'], f'{mode} is not valid option'
         with amp.autocast(False):
             model_kwargs = {'hide': hide, 'cover': x}
+
             if mode == 'encode':
                 assert hide is not None, 'Expecting two inputs when encoding'
                 model = self.model.encoder
@@ -104,6 +105,23 @@ class LitModel(pl.LightningModule):
                 model_kwargs['weight'] = c_weight
                 gen = self.eval_sampler.sample(model=model, cond=c_cond, h_cond=h_cond, noise=noise, x_start=cover,
                                                cond_fn=conda_fn, model_kwargs=model_kwargs)
+
+            elif mode == 'encode_cfg':
+                assert hide is not None, 'Expecting two inputs when encoding'
+                cover = torch.cat([x] * 2)
+                hide = torch.cat([hide, x])
+
+                model = self.model.encoder
+                c_cond = model.encode(cover)['cond'].detach()
+                h_cond = model.encode(hide)['cond'].detach()
+                noise = torch.cat([self.encode_stochastic(cover, cond=c_cond, h_cond=h_cond)])
+
+                cond_fn = self.model.cond_fn_cfg if c_guidance else None
+                model_kwargs = {'hide': hide, 'cover': cover, 'cfg': True, 'cond': c_cond, 'h_cond': h_cond,
+                                'c_weight': c_weight}
+                gen = self.eval_sampler.sample(model=model, cond=c_cond, h_cond=h_cond, noise=noise, x_start=cover,
+                                               cond_fn=cond_fn, model_kwargs=model_kwargs)
+                gen, _ = gen.chunk(2)
             else:
                 model = self.model.decoder
                 if hide is not None:
@@ -206,8 +224,15 @@ class LitModel(pl.LightningModule):
             device = cover.device
             perceptual_loss = None
 
+            # TODO: Turn to a function
+            probs = torch.ones((batch_size)) * 0.2
+            dropout = 1 - torch.bernoulli(probs)
+            dropout = dropout == 1.
+            hide[~dropout] = cover[~dropout]
+
             if self.conf.sample_on_train_start:
-                self(x=cover, hide=hide, noise=noise, mode='encode', c_guidance=True, c_weight=100)
+                gen = self(x=cover, hide=hide, noise=noise, mode='encode', c_guidance=True, c_weight=0)
+                degen = self(x=gen, hide=None, noise=noise, mode='decode', c_guidance=False, c_weight=0.75)
                 self.log_sample(cover=cover, hide=hide, noise=noise, mode='log_on_start')
                 self.conf.sample_on_train_start = False
 
